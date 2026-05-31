@@ -172,6 +172,9 @@ func runProduce(host: String, port: UInt16, bitrate: Int) {
                                              flags: isKeyframe ? .keyframe : [],
                                              payload: data))
             frameCount.inc()
+            // Diag: keyframes are infrequent; their cadence (and their absence after ~2s
+            // static) confirms idle is now P-frame-refined rather than re-keyframed.
+            if isKeyframe { print("[superconnect-mac] keyframe \(data.count / 1024)KB") }
         }
         prod.onError = { fputs("[superconnect-mac] producer: \($0)\n", stderr) }
         producer = prod
