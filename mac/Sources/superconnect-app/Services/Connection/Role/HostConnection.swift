@@ -82,8 +82,11 @@ final class HostConnection: ConnectionEngine {
             guard let self, self.running, gen == self.generation else { return }
             self.buildPipeline(caps: session.peerCaps, gen: gen)
         }
-        // Tablet rotated / changed resolution → rebuild the virtual display to match (#58).
-        session.onCapsUpdate = { [weak self] caps in self?.reconfigure(caps: caps, gen: gen) }
+        // #58 rotation re-negotiation DISABLED: destroying + recreating the CGVirtualDisplay
+        // mid-session is unreliable (loses the display; macOS restores a remembered MIRROR
+        // arrangement on the rebuilt one). Pending a reconfigure-in-place redesign. The tablet
+        // may still send caps_update; we intentionally ignore it.
+        // session.onCapsUpdate = { [weak self] caps in self?.reconfigure(caps: caps, gen: gen) }
         session.onInput = { [weak self] data in
             if let e = InputCodec.decode(data) { self?.injector?.inject(e) }
         }

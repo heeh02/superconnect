@@ -105,6 +105,16 @@ public final class VirtualDisplay {
         // to the native rate so it genuinely composites at e.g. 120 Hz (and Settings
         // reflects 120, not 60).
         forceMode(pointW: modeWidth, pixelW: maxPixelsWide, refresh: config.refreshRate)
+        ensureExtended()
+    }
+
+    /// Force this display to EXTEND, never mirror. macOS can restore a remembered mirror
+    /// arrangement for a display with the same identity (vendor/product/serial); this clears it.
+    private func ensureExtended() {
+        var cfg: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&cfg) == .success, let cfg else { return }
+        CGConfigureDisplayMirrorOfDisplay(cfg, displayID, kCGNullDirectDisplay)
+        _ = CGCompleteDisplayConfiguration(cfg, .forSession)
     }
 
     /// Pin the active mode to the (pointW, pixelW, refresh) variant if it exists.
