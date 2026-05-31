@@ -1,0 +1,9 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "Superconnect tablet display module" },
+    { "name": "EntryAbility_desc", "value": "Superconnect" },
+    { "name": "EntryAbility_label", "value": "Superconnect" },
+    { "name": "app_name", "value": "Superconnect" },
+    { "name": "perm_internet_reason", "value": "Receive the Mac screen stream and send touch/pen input over a local TCP connection (USB or LAN)." }
+  ]
+}

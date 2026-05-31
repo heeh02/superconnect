@@ -1,0 +1,47 @@
+# macOS
+.DS_Store
+
+# Swift / SwiftPM
+mac/.build/
+mac/.swiftpm/
+*.xcodeproj
+DerivedData/
+
+# C++ host test artifacts
+shared/cpp/tests/frame_codec_test
+*.o
+*.out
+
+# HarmonyOS / DevEco build artifacts
+harmony/**/build/
+harmony/**/.cxx/
+harmony/oh_modules/
+harmony/**/oh_modules/
+harmony/.hvigor/
+harmony/.clangd/
+harmony/local.properties
+harmony/**/.preview/
+*.har
+*.hap
+*.hsp
+
+# Signing material (NEVER commit)
+*.p12
+*.cer
+*.csr
+*.keystore
+*.jks
+*.p7b
+*.mobileprovision
+*.key
+
+# IDE / editors
+.idea/
+.vscode/
+*.iml
+
+# Logs / scratch
+*.log
+
+# Claude Code session / local memory (not for publish)
+.claude/

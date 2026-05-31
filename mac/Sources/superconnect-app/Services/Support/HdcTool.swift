@@ -1,0 +1,56 @@
+import Foundation
+
+/// Thin wrapper around the HarmonyOS `hdc` CLI: locate it, list connected (wired)
+/// devices, and open a USB port-forward for a specific device. Used by `WiredDiscovery`
+/// (enumeration) and `HdcFportTunnel` (per-device tunnel).
+enum HdcTool {
+    /// Resolve the hdc binary across common DevEco Studio install locations.
+    static func path() -> String? {
+        let fm = FileManager.default
+        let candidates = [
+            "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc",
+            "/Applications/DevEco-Studio.app/Contents/tools/hdc/hdc",
+            "\(NSHomeDirectory())/command-line-tools/sdk/default/openharmony/toolchains/hdc",
+        ]
+        return candidates.first { fm.isExecutableFile(atPath: $0) }
+    }
+
+    /// Serials of currently-attached devices (`hdc list targets`). Empty if hdc missing
+    /// or nothing connected. "[Empty]" sentinel is filtered out.
+    static func listTargets() -> [String] {
+        guard let hdc = path() else { return [] }
+        let out = run(hdc, ["list", "targets"])
+        return out
+            .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("[") && $0 != "Empty" }
+    }
+
+    /// Forward `tcp:port` on this Mac to `tcp:port` on the given device.
+    @discardableResult
+    static func fport(serial: String, port: UInt16) -> Bool {
+        guard let hdc = path() else { return false }
+        let out = run(hdc, ["-t", serial, "fport", "tcp:\(port)", "tcp:\(port)"])
+        return out.localizedCaseInsensitiveContains("OK") || out.isEmpty
+    }
+
+    static func killFport(serial: String, port: UInt16) {
+        guard let hdc = path() else { return }
+        _ = run(hdc, ["-t", serial, "fport", "rm", "tcp:\(port)", "tcp:\(port)"])
+    }
+
+    // MARK: - Process helper
+
+    private static func run(_ launchPath: String, _ args: [String]) -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: launchPath)
+        p.arguments = args
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = Pipe()
+        do { try p.run() } catch { return "" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+}

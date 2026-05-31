@@ -1,0 +1,57 @@
+{
+  "_comment": "Golden frame-encoding vectors — the cross-language conformance contract. Frame = channel:u8 | flags:u8 | length:u32-LE | payload. Every implementation must encode (channel,flags,payloadHex) to EXACTLY frameHex, and decode frameHex back to the same triple. Keep in sync with proto/protocol.md and both test suites (mac/Tests, shared/cpp/tests).",
+  "frameHeaderSize": 6,
+  "maxFramePayload": 16777216,
+  "vectors": [
+    {
+      "name": "control-hi",
+      "channel": 0,
+      "flags": 0,
+      "payloadHex": "6869",
+      "frameHex": "0000020000006869"
+    },
+    {
+      "name": "video-keyframe-deadbeef",
+      "channel": 1,
+      "flags": 1,
+      "payloadHex": "deadbeef",
+      "frameHex": "010104000000deadbeef"
+    },
+    {
+      "name": "input-empty",
+      "channel": 2,
+      "flags": 0,
+      "payloadHex": "",
+      "frameHex": "020000000000"
+    },
+    {
+      "name": "control-ping-json",
+      "channel": 0,
+      "flags": 0,
+      "payloadHex": "7b2274797065223a2270696e67227d",
+      "frameHex": "00000f0000007b2274797065223a2270696e67227d"
+    }
+  ],
+  "inputRecordSize": 44,
+  "_inputComment": "INPUT event record (proto/protocol.md §5), 44 bytes LE: type:u8 tool:u8 buttons:u8 flags:u8 | timestampMs:u64 | x:f32 y:f32 pressure:f32 | tiltX:f32 tiltY:f32 | scrollX:f32 scrollY:f32 | keyCode:u16 reserved:u16. Asserted by mac InputCodecTests; ArkTS InputCodec.ets must match.",
+  "inputVectors": [
+    {
+      "name": "input-pen-move",
+      "type": 1,
+      "tool": 1,
+      "buttons": 1,
+      "flags": 0,
+      "timestampMs": 0,
+      "x": 0.5,
+      "y": 0.25,
+      "pressure": 1.0,
+      "tiltX": 0.0,
+      "tiltY": 0.0,
+      "scrollX": 0.0,
+      "scrollY": 0.0,
+      "keyCode": 0,
+      "reserved": 0,
+      "recordHex": "0101010000000000000000000000003f0000803e0000803f0000000000000000000000000000000000000000"
+    }
+  ]
+}

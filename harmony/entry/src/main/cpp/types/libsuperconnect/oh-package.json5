@@ -1,0 +1,6 @@
+{
+  "name": "libsuperconnect.so",
+  "types": "./index.d.ts",
+  "version": "1.0.0",
+  "description": "Superconnect native H.264 decoder + XComponent renderer"
+}
