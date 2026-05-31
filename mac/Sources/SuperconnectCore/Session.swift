@@ -16,6 +16,7 @@ public final class Session {
 
     public var onLog: ((String) -> Void)?
     public var onConnected: (() -> Void)?        // fired after hello_ack
+    public var onCapsUpdate: (([String: Any]) -> Void)?   // tablet panel caps changed (rotation/resolution)
     public var onRTT: ((Double) -> Void)?         // milliseconds
     public var onInput: ((Data) -> Void)?         // INPUT-channel payload (Pad→Mac)
     public var onText: ((String) -> Void)?        // committed Unicode text (Pad→Mac IME)
@@ -122,6 +123,11 @@ public final class Session {
             peerCaps = object["caps"] as? [String: Any]
             onLog?("received hello_ack from peer")
             onConnected?()
+        case "caps_update":
+            // Tablet rotated / changed resolution → updated panel caps. Re-negotiate the display.
+            peerCaps = object["caps"] as? [String: Any]
+            onLog?("received caps_update from peer")
+            if let caps = peerCaps { onCapsUpdate?(caps) }
         case "hello":
             // We are the client in Phase 0; a hello here would be unexpected, but be lenient.
             onLog?("received hello (peer also greeted)")

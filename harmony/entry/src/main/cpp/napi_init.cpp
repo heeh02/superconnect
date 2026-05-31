@@ -68,6 +68,11 @@ napi_value SetVideoSize(napi_env env, napi_callback_info info) {
     napi_get_value_int32(env, args[0], &w);
     napi_get_value_int32(env, args[1], &h);
     if (w > 0 && h > 0) {
+        // Resolution changed mid-stream (tablet rotated / Mac re-negotiated) → restart the decoder
+        // at the new size. stop() resets started_ so the following tryStart re-Configures the codec.
+        if (g_ctx.sizeKnown && (w != g_ctx.width || h != g_ctx.height)) {
+            g_ctx.decoder.stop();
+        }
         g_ctx.width = w;
         g_ctx.height = h;
         g_ctx.sizeKnown = true;

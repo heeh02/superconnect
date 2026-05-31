@@ -80,33 +80,10 @@ final class HostConnection: ConnectionEngine {
 
         session.onConnected = { [weak self] in
             guard let self, self.running, gen == self.generation else { return }
-            let negCodec = self.codec(from: session.peerCaps)
-            let negHdr = self.hdrEnabled(from: session.peerCaps)
-            var cfg = self.displayConfig(from: session.peerCaps)
-            cfg.hdr = negHdr   // HDR reference display → macOS keeps EDR headroom
-            let vd = VirtualDisplay(cfg)
-            self.virtualDisplay = vd
-            self.injector = InputInjector(displayID: vd.displayID)
-            let negFps = Int(cfg.refreshRate)
-            let mi = vd.modeInfo()
-            self.tele.resolution = "\(mi.pointW)×\(mi.pointH)"
-            self.tele.codec = negCodec.rawValue.uppercased() + (negHdr ? " · HDR10" : "")
-            self.telemetrySubject.send(self.tele)
-
-            let prod = Producer(virtualDisplay: vd, fps: negFps,
-                                bitrate: self.bitrateMbps * 1_000_000, codec: negCodec, hdr: negHdr)
-            prod.onResolution = { w, h in
-                session.sendVideoConfig(width: w, height: h, codec: negCodec.rawValue, hdr: negHdr ? "pq" : "off")
-            }
-            prod.onEncoded = { [weak self] data, isKeyframe in
-                transport.send(FrameCodec.encode(channel: .video, flags: isKeyframe ? .keyframe : [], payload: data))
-                guard let self else { return }
-                self.frameLock.lock(); self.frames += 1; self.frameLock.unlock()
-                if self.stateSubject.value != .connected { self.stateSubject.send(.connected) }
-            }
-            self.producer = prod
-            Task { try? await prod.start() }
+            self.buildPipeline(caps: session.peerCaps, gen: gen)
         }
+        // Tablet rotated / changed resolution → rebuild the virtual display to match (#58).
+        session.onCapsUpdate = { [weak self] caps in self?.reconfigure(caps: caps, gen: gen) }
         session.onInput = { [weak self] data in
             if let e = InputCodec.decode(data) { self?.injector?.inject(e) }
         }
@@ -135,6 +112,62 @@ final class HostConnection: ConnectionEngine {
         }
         transport?.stop()
         session = nil; transport = nil; virtualDisplay = nil; injector = nil
+    }
+
+    // MARK: - Pipeline (built on connect, rebuilt on caps_update)
+
+    /// Build the capture→encode→stream pipeline for the given panel caps: a matching virtual
+    /// display, an injector bound to it, and a producer (which sends video_config + a keyframe).
+    private func buildPipeline(caps: [String: Any]?, gen: Int) {
+        guard running, gen == generation, let session = self.session, let transport = self.transport else { return }
+        let negCodec = codec(from: caps)
+        let negHdr = hdrEnabled(from: caps)
+        var cfg = displayConfig(from: caps)
+        cfg.hdr = negHdr   // HDR reference display → macOS keeps EDR headroom
+        let vd = VirtualDisplay(cfg)
+        self.virtualDisplay = vd
+        self.injector = InputInjector(displayID: vd.displayID)
+        let negFps = Int(cfg.refreshRate)
+        let mi = vd.modeInfo()
+        self.tele.resolution = "\(mi.pointW)×\(mi.pointH)"
+        self.tele.codec = negCodec.rawValue.uppercased() + (negHdr ? " · HDR10" : "")
+        self.telemetrySubject.send(self.tele)
+
+        let prod = Producer(virtualDisplay: vd, fps: negFps,
+                            bitrate: self.bitrateMbps * 1_000_000, codec: negCodec, hdr: negHdr)
+        prod.onResolution = { w, h in
+            session.sendVideoConfig(width: w, height: h, codec: negCodec.rawValue, hdr: negHdr ? "pq" : "off")
+        }
+        prod.onEncoded = { [weak self] data, isKeyframe in
+            transport.send(FrameCodec.encode(channel: .video, flags: isKeyframe ? .keyframe : [], payload: data))
+            guard let self else { return }
+            self.frameLock.lock(); self.frames += 1; self.frameLock.unlock()
+            if self.stateSubject.value != .connected { self.stateSubject.send(.connected) }
+        }
+        self.producer = prod
+        Task { try? await prod.start() }
+    }
+
+    /// Re-negotiate when the tablet rotates / changes resolution: if the new caps map to different
+    /// display dimensions, cleanly stop the producer + release the old virtual display (no leak),
+    /// then rebuild the pipeline at the new size. The transport/session stay up.
+    private func reconfigure(caps: [String: Any]?, gen: Int) {
+        guard running, gen == generation, let vd = virtualDisplay else { return }
+        let newCfg = displayConfig(from: caps)
+        let mi = vd.modeInfo()
+        if mi.pointW == newCfg.pointWidth && mi.pointH == newCfg.pointHeight { return }   // no real change
+        stateSubject.send(.connecting)
+        let prod = producer; producer = nil
+        virtualDisplay = nil; injector = nil
+        DispatchQueue.global().async { [weak self] in
+            if let prod {
+                let sem = DispatchSemaphore(value: 0)
+                Task { await prod.stop(); sem.signal() }
+                _ = sem.wait(timeout: .now() + 2)
+            }
+            guard let self, self.running, gen == self.generation else { return }
+            self.buildPipeline(caps: caps, gen: gen)
+        }
     }
 
     // MARK: - Telemetry

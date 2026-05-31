@@ -68,7 +68,7 @@
 ### v0 — 华为平板 ↔ Mac（当前版本）
 **目标**：任意华为平板作为 Mac 的有线副屏。Mac = 主机（造屏 / 采集 / 编码 / 投出），平板 = 从机（解码 / 显示 + 回传触控 / 笔 / 键盘）。
 - **设备适配（任意华为平板）**：平板握手时上报 caps（`screenWidth/Height`、`refreshRate`、`scale`、`codecs`、`pen`、`hdr`；`session/Session.ets`）；Mac 据此**动态**创建虚拟屏（`HostConnection.displayConfig` → `CGVirtualDisplay`，`VirtualDisplay.ets` 按 config 建模）——任意分辨率 / 刷新率自适应，长边按编码器上限裁剪、强制偶数像素。**换一台华为平板无需改代码。**
-- **约束 / to-do**：平板需 **HarmonyOS NEXT（API 12+）**（应用为 NEXT HAP，旧版 HarmonyOS 4.x 装不上）；当前**一次一路**连接（同时多机属 Layer A，见 v1）；旋转 / 分辨率中途变化暂不重协商（to-do）。
+- **约束 / to-do**：平板需 **HarmonyOS NEXT（API 12+）**（应用为 NEXT HAP，旧版 HarmonyOS 4.x 装不上）；当前**一次一路**连接（同时多机属 Layer A，见 v1）。**旋转 / 分辨率中途变化已支持自动重协商**（平板侧 `Session` 监听 `display.on('change')`、去抖去重后发 `caps_update` → Mac `HostConnection.reconfigure` 重建虚拟屏 + 解码器按新分辨率重启，#58）。
 
 ### v1 — 全平台互联（to-do，长期目标）🧭
 **目标**：**任意设备（Windows / macOS / iOS / HarmonyOS / Android）均可作为主机投出，或作为从机接收，运行时自由选择角色。**

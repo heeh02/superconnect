@@ -6,6 +6,7 @@
  */
 import util from '@ohos.util';
 import { display } from '@kit.ArkUI';
+import { Callback } from '@ohos.base';
 import sc from 'libsuperconnect.so';
 import { Channel, Frame, FrameDecoder, encodeFrame } from '../protocol/FrameCodec';
 
@@ -54,9 +55,36 @@ export class Session {
   /** Negotiated encoded video resolution + codec + HDR mode (Mac→Pad video_config). */
   onVideoConfig: ((width: number, height: number, codec: string, hdr: string) => void) | null = null;
 
+  // Rotation / resolution re-negotiation: watch the panel and tell the Mac when its
+  // dimensions change so it rebuilds the virtual display to match (#58).
+  private lastCapsW: number = 0;
+  private lastCapsH: number = 0;
+  private capsTimer: number = -1;
+  private readonly onDisplayChange: Callback<number> = (_id: number): void => {
+    // A rotation fires a burst of 'change' events — debounce, then send only if dims changed.
+    if (this.capsTimer >= 0) { clearTimeout(this.capsTimer); }
+    this.capsTimer = setTimeout((): void => {
+      this.capsTimer = -1;
+      const caps: HelloAckCaps = this.localCaps();
+      if (caps.screenWidth !== this.lastCapsW || caps.screenHeight !== this.lastCapsH) {
+        this.lastCapsW = caps.screenWidth;
+        this.lastCapsH = caps.screenHeight;
+        this.sendControl({ type: 'caps_update', caps: caps });
+        this.log('caps_update sent ' + caps.screenWidth + '×' + caps.screenHeight);
+      }
+    }, 400);
+  };
+
   constructor(send: SendFn, log: LogFn) {
     this.send = send;
     this.log = log;
+    try { display.on('change', this.onDisplayChange); } catch (e) { this.log('display.on failed ' + JSON.stringify(e)); }
+  }
+
+  /** Remove the rotation listener — call on disconnect so the subscription doesn't dangle. */
+  dispose(): void {
+    if (this.capsTimer >= 0) { clearTimeout(this.capsTimer); this.capsTimer = -1; }
+    try { display.off('change', this.onDisplayChange); } catch (e) { /* best-effort */ }
   }
 
   /** Feed raw bytes from the socket. */
@@ -105,15 +133,19 @@ export class Session {
     }
 
     switch (msg.type) {
-      case 'hello':
+      case 'hello': {
         this.log('received hello from ' + (msg.role ?? 'peer'));
+        const caps: HelloAckCaps = this.localCaps();
+        this.lastCapsW = caps.screenWidth;   // baseline so the first 'change' isn't a spurious re-negotiation
+        this.lastCapsH = caps.screenHeight;
         this.sendControl({
           type: 'hello_ack',
           role: 'pad',
           protocolVersion: 1,
-          caps: this.localCaps(),
+          caps: caps,
         });
         break;
+      }
       case 'ping':
         // Echo seq + original t0, add our own clock t1 (milliseconds).
         this.sendControl({

@@ -67,6 +67,7 @@ export class TcpServerTransport {
       });
       client.on('close', (): void => {
         this.onStatus('client disconnected');
+        session.dispose();   // remove the rotation listener for this session
         // Only clear the sender if it's still the active client.
         if (client.clientId === this.currentClientId) {
           this.currentSend = null;

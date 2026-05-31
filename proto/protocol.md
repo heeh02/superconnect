@@ -86,6 +86,15 @@ NTP 式：`ping(t0)` → 对端记 `t1`(收到)、`t2`(回发) → `pong(t0,t1,t
 { "type": "video_config", "codec": "h264", "width": 2560, "height": 1600 }
 ```
 
+### 4.6 能力更新 / 重协商（Pad→Mac，#58，向后兼容附加）
+平板面板发生变化（旋转 / 分辨率切换）时，主动上报新的 caps；Mac 据此重建虚拟屏并重发 `video_config`，
+平板解码器按新分辨率重启。`caps` 结构同 `hello_ack`。旧端忽略未知 `type`，故为附加、向后兼容。
+```jsonc
+{ "type": "caps_update",
+  "caps": { "codecs": ["hevc","h264"], "screenWidth": 1920, "screenHeight": 2880,
+            "scale": 2, "refreshRate": 120, "pen": true } }
+```
+
 ## 5. INPUT 通道（Phase 2/3，已实现）
 固定 **44 字节**小端记录（便于 Swift/ArkTS/C++ 完全一致；黄金向量见 `vectors.json` `inputVectors`）：
 
