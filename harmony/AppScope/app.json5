@@ -3,8 +3,9 @@
     "bundleName": "com.superconnect.pad",
     "vendor": "superconnect",
     "versionCode": 1000000,
-    "versionName": "0.1.0",
-    "icon": "$media:startIcon",
+    "versionName": "1.0.0",
+    "buildVersion": "1",
+    "icon": "$media:layered_image",
     "label": "$string:app_name"
   }
 }

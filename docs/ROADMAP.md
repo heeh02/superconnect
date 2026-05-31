@@ -78,7 +78,7 @@
 
 ## 4. 开源前置（仓库就绪性，🔧 P1）
 
-- **HarmonyOS 工程可构建性**：仓库 `harmony/` 目前是**源码快照**（`AppScope/app.json5` + `entry/src/...`），**缺少 DevEco 工程脚手架**（`build-profile.json5`、`hvigorfile.ts`、`oh-package.json5` 等）与 **`media/` 图标资源**（`app.json5`/`module.json5` 引用了 `$media:startIcon` 但仓库无 `media/` 目录）。真正可构建的工程在 `~/DevEcoStudioProjects/superconnect`（bundle 为 `com.example.superconnect`，仓库为更干净的 `com.superconnect.pad`）。
+- **HarmonyOS 工程可构建性**：✅ 已完成（2026-05-31）。`harmony/` 现为**完整的 DevEco 工程**（脚手架 `build-profile.json5`/`hvigorfile.ts`/`oh-package.json5`/`hvigor/` + `media/` 星座图标 + `entrybackupability` 全部就位），可直接 `ohpm install` + 构建。**签名已清空**（`signingConfigs: []`，不含证书/密钥/口令），克隆者用 DevEco 自动签名。bundle 为 `com.superconnect.pad`。
   - **建议**：把 DevEco 工程的脚手架与 `resources/.../media/`（含星座图标 `background/foreground/layered_image`）同步进仓库，排除 `oh_modules/`、`build/`、签名材料，使开源仓库可直接 `ohpm install` + 构建。
 - **许可证**：尚未选择（MIT / Apache-2.0 / …），开源前需补 `LICENSE`。
 - **安全**：仓库已确认不含任何测试账号/签名私钥；`.gitignore` 已排除签名材料与构建产物。

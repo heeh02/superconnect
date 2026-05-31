@@ -49,7 +49,7 @@ superconnect/
 │   ├── Sources/superconnect-probe/    # 探针（造屏/采集/编码/HDR dump 诊断）
 │   └── Tests/                         # 断言 proto/vectors.json
 ├── shared/cpp/           # 可移植 C++ 帧编解码（鸿蒙 NDK 复用）+ 主机测试
-├── harmony/              # 平板端源码 (ArkTS + cpp/)  ⚠ 见下方"构建说明"
+├── harmony/              # 平板端：完整 DevEco 工程 (ArkTS + cpp/)，可直接构建
 └── tools/                # check-device / fport / dev-up / preflight / grant-permissions
 ```
 
@@ -70,10 +70,10 @@ swift run superconnect-mac --produce    # 造扩展屏→采集→编码→推�
 权限：投屏需"屏幕录制"、输入注入需"辅助功能"（系统设置 → 隐私与安全性，授予运行的终端）。`tools/grant-permissions.sh` 可引导授予。
 
 ### 平板 HAP（HarmonyOS）
-> ⚠ **构建说明**：仓库 `harmony/` 是**源码快照**，当前**不含 DevEco 工程脚手架与图标资源**（详见 [`docs/ROADMAP.md`](docs/ROADMAP.md) §4）。真机构建请在 **DevEco Studio** 用"Native C++ 模板"建壳工程，放入 `harmony/` 源码后构建。端到端步骤见 **[`docs/ONDEVICE.md`](docs/ONDEVICE.md)**。
+> `harmony/` 是一个**完整的 DevEco Studio 工程**，可直接构建。出于开源安全，**签名配置为空**（`build-profile.json5` 的 `signingConfigs: []`，不含任何证书/密钥/口令）。首次构建：在 DevEco Studio 打开 `harmony/`，`ohpm install` 拉依赖，在 **Project Structure → Signing Configs** 勾选「Automatically generate signature」用你自己的华为开发者身份签名。端到端步骤见 **[`docs/ONDEVICE.md`](docs/ONDEVICE.md)**。
 
 ```bash
-# DevEco 工程构建/部署（示例）：
+# 命令行构建/部署（已配置自动签名后）：
 export JAVA_HOME=/Applications/DevEco-Studio.app/Contents/jbr/Contents/Home
 export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk
 hvigorw --no-daemon assembleHap -p product=default -p buildMode=debug

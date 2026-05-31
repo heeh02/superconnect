@@ -106,11 +106,11 @@ resized — the dead `reserved:u16` becomes `pointerId:u16` (legacy senders alre
 
 ---
 
-## 7. Repo layout: source vs DevEco build
+## 7. Repo layout: building each side
 
 The mac side builds directly from this repo (`cd mac && swift build`). The HarmonyOS side in
-`harmony/` is a **source snapshot** — it currently lacks the DevEco project scaffolding
-(`build-profile.json5`, `hvigorfile.ts`, `oh-package.json5`) and the `media/` icon resources, so it
-is **not standalone-buildable** yet (the working project lives in a local DevEco workspace). Making
-`harmony/` a self-contained, `ohpm install`-able project is a tracked open-source-readiness task —
-see **[`ROADMAP.md`](ROADMAP.md) §4**.
+`harmony/` is a **complete, self-contained DevEco Studio project** (scaffolding + `media/` icons +
+all source) — open it in DevEco, `ohpm install`, and build. Signing is intentionally empty
+(`build-profile.json5` → `signingConfigs: []`, no certs/keys/passwords committed); contributors
+enable DevEco's **automatic signing** with their own Huawei developer identity. The app bundle id
+is `com.superconnect.pad`.
