@@ -36,8 +36,8 @@ final class ConnectionCoordinator: ObservableObject {
             return
         }
 
-        state = .connecting
         connectedDeviceID = device.id
+        state = .connecting
 
         let tunnel = tunnelFor(device.transport)
         let engine = engineFor(role)
@@ -59,7 +59,7 @@ final class ConnectionCoordinator: ObservableObject {
                 engine.connect(host: dial.host, port: dial.port)
             } catch {
                 let appErr = (error as? AppError) ?? .tunnelFailed
-                DispatchQueue.main.async { self?.state = .failed(appErr) }
+                DispatchQueue.main.async { self?.connectedDeviceID = nil; self?.state = .failed(appErr) }
             }
         }
     }

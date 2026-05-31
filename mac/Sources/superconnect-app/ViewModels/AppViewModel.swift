@@ -37,24 +37,32 @@ final class AppViewModel: ObservableObject {
     var isBusy: Bool { state.isBusy }
     var canConnect: Bool { selectedDevice != nil }
 
+    deinit { permTimer?.invalidate() }
+
     // Actions
     func onAppear() {
         store.start()
         refreshPermissions()
-        if permTimer == nil {
-            // Re-poll so the permissions section flips after the user grants in System Settings.
-            permTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshPermissions() }
-        }
+        startPermissionPolling()
+    }
+
+    /// Poll permissions every 2s so the GUI flips after the user grants in System Settings;
+    /// stops itself once both are granted (re-armed by requestPermissions).
+    private func startPermissionPolling() {
+        guard permTimer == nil else { return }
+        permTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshPermissions() }
     }
 
     func refreshPermissions() {
         let s = SystemPermissions.hostStatus()
         if screenRecordingOK != s.screenRecording { screenRecordingOK = s.screenRecording }
         if accessibilityOK != s.accessibility { accessibilityOK = s.accessibility }
+        if screenRecordingOK && accessibilityOK { permTimer?.invalidate(); permTimer = nil }
     }
 
     func requestPermissions() {
         SystemPermissions.requestHost()
+        startPermissionPolling()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.refreshPermissions() }
     }
 
@@ -75,12 +83,15 @@ final class AppViewModel: ObservableObject {
 
     private func onDevices(_ devs: [Device]) {
         devices = devs
+        // Tear down if the CONNECTED device unplugged — independent of what's selected.
+        if let cid = coordinator.connectedDeviceID, !devs.contains(where: { $0.id == cid }) {
+            coordinator.disconnect()
+        }
         if selectedDeviceID == nil, devs.count == 1 {
             selectedDeviceID = devs[0].id                       // auto-select the only device
         }
         if let sel = selectedDeviceID, !devs.contains(where: { $0.id == sel }) {
-            if coordinator.connectedDeviceID == sel { coordinator.disconnect() }  // it unplugged
-            selectedDeviceID = devs.first?.id
+            selectedDeviceID = devs.first?.id                   // selected one vanished → reselect
         }
     }
 }

@@ -26,7 +26,7 @@ public final class VideoEncoder {
     public var onEncoded: ((Data, Bool) -> Void)?
     public var onError: ((String) -> Void)?
 
-    public init(width: Int, height: Int, fps: Int = 60, bitrate: Int = 20_000_000, codec: VideoCodec = .h264, hdr: Bool = false) {
+    public init(width: Int, height: Int, fps: Int = 60, bitrate: Int = 50_000_000, codec: VideoCodec = .h264, hdr: Bool = false) {
         self.width = Int32(width)
         self.height = Int32(height)
         self.fps = Int32(fps)

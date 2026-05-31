@@ -41,7 +41,7 @@ public final class Producer {
     public var onResolution: ((Int, Int) -> Void)?
     public var onError: ((String) -> Void)?
 
-    public init(virtualDisplay: VirtualDisplay, fps: Int = 60, bitrate: Int = 20_000_000, codec: VideoCodec = .h264, hdr: Bool = false) {
+    public init(virtualDisplay: VirtualDisplay, fps: Int = 60, bitrate: Int = 50_000_000, codec: VideoCodec = .h264, hdr: Bool = false) {
         self.virtualDisplay = virtualDisplay
         self.fps = fps
         self.bitrate = bitrate

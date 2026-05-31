@@ -35,7 +35,10 @@ struct DashboardView: View {
                 EmptyStateView()
                 Spacer(minLength: 0)
             } else {
-                List(vm.devices, selection: $vm.selectedDeviceID) { device in
+                List(vm.devices, selection: Binding(
+                    get: { vm.selectedDeviceID },
+                    set: { if let id = $0 { vm.select(id) } }   // routes through the mid-connection guard
+                )) { device in
                     SidebarRow(device: device,
                                state: device.id == vm.connectedDeviceID ? vm.state : .idle)
                 }
