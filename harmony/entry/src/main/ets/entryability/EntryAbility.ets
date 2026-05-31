@@ -27,13 +27,13 @@ export default class EntryAbility extends UIAbility {
         win.setWindowKeepScreenOn(true).catch((e: Object) => {
           hilog.error(DOMAIN, TAG, 'keepScreenOn: %{public}s', JSON.stringify(e));
         });
-        // Immersive full screen: extend layout under the system bars and hide
-        // them, so the Mac screen fills the panel edge-to-edge.
-        win.setWindowLayoutFullScreen(true).catch((e: Object) => {
+        // Launch WINDOWED (small preview): keep the system bars and don't extend under them.
+        // The page switches to immersive fullscreen on double-tap (see WindowMode / DisplayMode).
+        win.setWindowLayoutFullScreen(false).catch((e: Object) => {
           hilog.error(DOMAIN, TAG, 'layoutFullScreen: %{public}s', JSON.stringify(e));
         });
-        const noBars: Array<'status' | 'navigation'> = [];
-        win.setWindowSystemBarEnable(noBars).catch((e: Object) => {
+        const bars: Array<'status' | 'navigation'> = ['status', 'navigation'];
+        win.setWindowSystemBarEnable(bars).catch((e: Object) => {
           hilog.error(DOMAIN, TAG, 'systemBar: %{public}s', JSON.stringify(e));
         });
       } catch (e) {
@@ -44,6 +44,15 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageDestroy(): void {
     hilog.info(DOMAIN, TAG, 'onWindowStageDestroy');
+  }
+
+  // Notification "exit fullscreen" action re-foregrounds this (singleton) ability with scAction.
+  // Bump an AppStorage key the page watches → page returns to windowed.
+  onNewWant(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
+    const params = want.parameters as Record<string, Object> | undefined;
+    if (params && params['scAction'] === 'exitFullscreen') {
+      AppStorage.setOrCreate('scExitFullscreen', Date.now());
+    }
   }
 
   onForeground(): void {}

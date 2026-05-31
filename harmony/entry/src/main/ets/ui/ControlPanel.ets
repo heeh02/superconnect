@@ -13,7 +13,9 @@ export struct ControlPanel {
   @Link isDrawingMode: boolean;
   @Link ballHidden: boolean;
   @Prop inputDisabled: boolean = false;
+  @Prop showExitFullscreen: boolean = false;
   onToggleInput?: (v: boolean) => void;
+  onExitFullscreen?: () => void;
   onClose?: () => void;
 
   build() {
@@ -45,6 +47,19 @@ export struct ControlPanel {
             this.ToggleRow('绘画模式（手写笔）', this.isDrawingMode, (v: boolean) => { this.isDrawingMode = v; })
             this.ToggleRow('暂停输入（操作平板）', this.inputDisabled, (v: boolean) => { this.onToggleInput?.(v); })
             this.ToggleRow('隐藏悬浮球', this.ballHidden, (v: boolean) => { this.ballHidden = v; })
+
+            this.Section('显示模式')
+            if (this.showExitFullscreen) {
+              Row() {
+                Text('退出全屏 · 回到小窗').fontSize(15).fontColor(Theme.accent)
+                Blank()
+                Text('›').fontSize(18).fontColor($r('sys.color.font_secondary'))
+              }.width('100%').padding({ top: 8, bottom: 8 })
+              .onClick(() => { this.onExitFullscreen?.(); this.onClose?.(); })
+            } else {
+              Text('小窗模式 · 双击画面进入全屏')
+                .fontSize(13).fontColor($r('sys.color.font_tertiary')).width('100%')
+            }
 
             this.Section('触控板手势')
             this.CheatRow('移动', '单指滑动')

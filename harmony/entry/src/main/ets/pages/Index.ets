@@ -3,11 +3,16 @@ import { KeyboardHandler } from '../input/KeyboardHandler';
 import { ConnectionManager } from '../services/ConnectionManager';
 import { AppEnvironment } from '../app/AppEnvironment';
 import { ConnectionStatus, statusLabel, statusColor } from '../models/ConnectionStatus';
+import { DisplayMode } from '../models/DisplayMode';
 import { StreamInfo } from '../models/StreamInfo';
+import { WindowMode } from '../services/WindowMode';
+import { FullscreenNotification } from '../services/FullscreenNotification';
 import { FloatingBall } from '../components/FloatingBall';
 import { IdleView } from '../ui/IdleView';
 import { ControlPanel } from '../ui/ControlPanel';
 import { PausedBanner } from '../ui/PausedBanner';
+import { WindowedView } from '../ui/WindowedView';
+import { common } from '@kit.AbilityKit';
 import hilog from '@ohos.hilog';
 import sc from 'libsuperconnect.so';
 
@@ -16,6 +21,7 @@ import sc from 'libsuperconnect.so';
 @Component
 struct Index {
   @State private connStatus: ConnectionStatus = ConnectionStatus.Idle;
+  @State private displayMode: DisplayMode = DisplayMode.Windowed;  // small preview until double-tap
   @State logs: string[] = [];
   @State isDrawingMode: boolean = false;
   @State surfaceW: number = 0;
@@ -30,6 +36,8 @@ struct Index {
   @State private vWidth: number = 0;           // live stream resolution / codec (from video_config)
   @State private vHeight: number = 0;
   @State private vCodec: string = '';
+  // Bumped by EntryAbility.onNewWant when the "exit fullscreen" notification is tapped.
+  @StorageLink('scExitFullscreen') @Watch('onExitFsRequest') private exitFsReq: number = 0;
   private imeCtrl: TextInputController = new TextInputController();
   private kbd: KeyboardHandler | null = null;   // physical + soft keyboard → Mac (owns metaHeld)
   private env: AppEnvironment | null = null;    // composition root (selects the role engine)
@@ -37,19 +45,30 @@ struct Index {
   private router: InputRouter | null = null;   // owns pen + trackpad + finger input (FSMs)
   private readonly port: number = 8888;
 
+  private ctx(): common.UIAbilityContext { return getContext(this) as common.UIAbilityContext; }
+
   aboutToAppear(): void {
     // HDR capability probe (decisive gate): log the HW HEVC decoder's 10-bit/HDR support.
     try {
       hilog.info(0x0, 'SCDIAG', 'hdrDecodeCaps=%{public}d supportsHevc=%{public}d',
                  sc.hdrDecodeCaps(), sc.supportsHevc() ? 1 : 0);
     } catch (e) { this.appendLog('hdrProbe ' + JSON.stringify(e)); }
+    // Start windowed; ask once for notification permission (used by the fullscreen exit action).
+    WindowMode.apply(this.ctx(), DisplayMode.Windowed, (m: string): void => { this.appendLog(m); });
+    FullscreenNotification.enable(this.ctx(), (m: string): void => { this.appendLog(m); });
     // Composition root selects the role engine (Receiver today); the manager owns the
     // connection lifecycle. The page just binds the view state it shows.
     this.env = new AppEnvironment(this.port);
     const mgr: ConnectionManager = this.env.manager;
     this.manager = mgr;
     mgr.onLog = (msg: string): void => { this.appendLog(msg); };
-    mgr.onStatus = (s: ConnectionStatus): void => { this.connStatus = s; };
+    mgr.onStatus = (s: ConnectionStatus): void => {
+      this.connStatus = s;
+      // Stream ended while fullscreen → drop back to the windowed window state.
+      if (s !== ConnectionStatus.Streaming && this.displayMode === DisplayMode.Fullscreen) {
+        this.exitFullscreen();
+      }
+    };
     mgr.onStreamInfo = (info: StreamInfo): void => {
       this.vWidth = info.width; this.vHeight = info.height;
       this.vCodec = info.codec + (info.hdr !== 'off' ? ' · HDR' : '');
@@ -75,22 +94,47 @@ struct Index {
     this.logs = next.slice(-100);
   }
 
+  private streaming(): boolean { return this.connStatus === ConnectionStatus.Streaming; }
+  private windowed(): boolean { return this.streaming() && this.displayMode === DisplayMode.Windowed; }
+  private fullscreen(): boolean { return this.streaming() && this.displayMode === DisplayMode.Fullscreen; }
+
+  // Windowed preview box: fit the Mac aspect (fallback 16:10) within ~72% of the panel.
+  private aspect(): number { return (this.vWidth > 0 && this.vHeight > 0) ? this.vWidth / this.vHeight : 1.6; }
+  private windowedW(): number {
+    const maxW: number = this.surfaceW * 0.72;
+    const maxH: number = this.surfaceH * 0.72;
+    return (maxW / this.aspect() <= maxH) ? maxW : maxH * this.aspect();
+  }
+  private windowedH(): number {
+    const maxW: number = this.surfaceW * 0.72;
+    const maxH: number = this.surfaceH * 0.72;
+    return (maxW / this.aspect() <= maxH) ? maxW / this.aspect() : maxH;
+  }
+
+  private enterFullscreen(): void {
+    this.displayMode = DisplayMode.Fullscreen;
+    WindowMode.apply(this.ctx(), DisplayMode.Fullscreen, (m: string): void => { this.appendLog(m); });
+    FullscreenNotification.show(this.ctx(), (m: string): void => { this.appendLog(m); });
+  }
+
+  private exitFullscreen(): void {
+    this.displayMode = DisplayMode.Windowed;
+    WindowMode.apply(this.ctx(), DisplayMode.Windowed, (m: string): void => { this.appendLog(m); });
+    FullscreenNotification.cancel((m: string): void => { this.appendLog(m); });
+  }
+
+  // Watcher for the notification "exit fullscreen" action (AppStorage bump from EntryAbility).
+  private onExitFsRequest(): void {
+    if (this.fullscreen()) { this.exitFullscreen(); }
+  }
 
   build() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      // The Mac screen renders here.
-      XComponent({ id: 'sc_surface', type: XComponentType.SURFACE, libraryname: 'superconnect' })
-        .onLoad(() => { this.appendLog('XComponent surface loaded'); })
-        .width('100%')
-        .height('100%')
-
-      // Transparent layer ON TOP that reliably captures touch in ArkTS (the
-      // XComponent's native path would otherwise swallow touches).
+    Stack({ alignContent: Alignment.Center }) {
+      // Base layer: dark backdrop + tracks the full panel size (used to lay out the small preview
+      // and to keep the floating ball on-screen).
       Column()
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#00000000')
-        .hitTestBehavior(this.inputDisabled ? HitTestMode.None : HitTestMode.Block)
+        .width('100%').height('100%')
+        .backgroundColor('#FF0B0E14')
         .onAreaChange((_o: Area, n: Area) => {
           this.surfaceW = Number(n.width);
           this.surfaceH = Number(n.height);
@@ -99,42 +143,89 @@ struct Index {
             this.ballX = this.surfaceW - 56 - 12;
             this.ballY = this.surfaceH / 2 - 28;
           } else {
-            // Keep the ball on-screen across rotation / size changes.
             this.ballX = Math.min(Math.max(this.ballX, 12), this.surfaceW - 56 - 12);
             this.ballY = Math.min(Math.max(this.ballY, 12), this.surfaceH - 56 - 12);
           }
         })
-        .onTouch((e: TouchEvent) => { this.router?.onTouch(e); })
-        .onMouse((e: MouseEvent) => { this.router?.onMouse(e); })        // trackpad cursor/click/drag
-        .onAxisEvent((e: AxisEvent) => { this.router?.onAxis(e); })      // trackpad scroll/pinch
-        .focusable(false)   // never steal key focus from the hidden IME catcher
 
-      // Hidden, focused TextInput that owns the physical keyboard. Shortcuts / named
-      // keys are consumed pre-IME and sent as raw keys; printable + IME-composed
-      // (Chinese) text falls through and is sent as committed Unicode text.
-      TextInput({ text: this.imeText, controller: this.imeCtrl })
-        .id('imecatcher')
-        .focusable(true)
-        .defaultFocus(true)
-        .opacity(0)
-        .width(1)
-        .height(1)
-        .onKeyPreIme((e: KeyEvent): boolean => {
-          return this.kbd?.onKeyPreIme(e) ?? false;   // physical keys → Mac (handler owns the logic)
-        })
-        .onWillInsert((info: InsertValue): boolean => {
-          return this.kbd?.onWillInsert(info) ?? false;
-        })
-        .onChange((value: string, preview?: PreviewText): void => {
-          this.kbd?.onCommit(value, preview);   // 3rd-party IME commit → Mac
-          this.imeText = '';                    // clear so the hidden field can't grow
-          this.imeCtrl.caretPosition(0);
-        })
-        .onWillDelete((info: DeleteValue): boolean => {
-          return this.kbd?.onWillDelete(info) ?? false;   // soft backspace/del → Mac keystroke
-        })
+      // The Mac screen renders here — always mounted (so the decoder surface persists); its size
+      // is the full panel in fullscreen, or a centered preview box in windowed mode.
+      XComponent({ id: 'sc_surface', type: XComponentType.SURFACE, libraryname: 'superconnect' })
+        .onLoad(() => { this.appendLog('XComponent surface loaded'); })
+        .width(this.windowed() ? this.windowedW() : '100%')
+        .height(this.windowed() ? this.windowedH() : '100%')
+        .borderRadius(this.windowed() ? 14 : 0)
 
-      if (this.connStatus !== ConnectionStatus.Streaming) {
+      // ── Fullscreen: input capture + IME + floating ball + control panel (today's behavior) ──
+      if (this.fullscreen()) {
+        // Transparent layer ON TOP that reliably captures touch in ArkTS.
+        Column()
+          .width('100%').height('100%').backgroundColor('#00000000')
+          .hitTestBehavior(this.inputDisabled ? HitTestMode.None : HitTestMode.Block)
+          .onTouch((e: TouchEvent) => { this.router?.onTouch(e); })
+          .onMouse((e: MouseEvent) => { this.router?.onMouse(e); })        // trackpad cursor/click/drag
+          .onAxisEvent((e: AxisEvent) => { this.router?.onAxis(e); })      // trackpad scroll/pinch
+          .focusable(false)   // never steal key focus from the hidden IME catcher
+
+        // Hidden, focused TextInput that owns the physical keyboard.
+        TextInput({ text: this.imeText, controller: this.imeCtrl })
+          .id('imecatcher')
+          .focusable(true)
+          .defaultFocus(true)
+          .opacity(0)
+          .width(1)
+          .height(1)
+          .onKeyPreIme((e: KeyEvent): boolean => {
+            return this.kbd?.onKeyPreIme(e) ?? false;   // physical keys → Mac
+          })
+          .onWillInsert((info: InsertValue): boolean => {
+            return this.kbd?.onWillInsert(info) ?? false;
+          })
+          .onChange((value: string, preview?: PreviewText): void => {
+            this.kbd?.onCommit(value, preview);   // 3rd-party IME commit → Mac
+            this.imeText = '';
+            this.imeCtrl.caretPosition(0);
+          })
+          .onWillDelete((info: DeleteValue): boolean => {
+            return this.kbd?.onWillDelete(info) ?? false;   // soft backspace/del → Mac keystroke
+          })
+
+        // Paused banner — safe way back when input capture is paused.
+        if (this.inputDisabled) {
+          PausedBanner({ surfaceW: this.surfaceW, onResume: () => { this.setInputDisabled(false); } })
+        }
+
+        // Floating control — tap = drawing toggle, long-press = open the control panel.
+        if (this.surfaceW > 0 && !this.ballHidden) {
+          FloatingBall({
+            drawing: $isDrawingMode,
+            ballX: $ballX,
+            ballY: $ballY,
+            screenW: this.surfaceW,
+            screenH: this.surfaceH,
+            onMenu: () => { this.showPanel = true; },
+          })
+        }
+        // Tiny restore handle when the ball is hidden.
+        if (this.surfaceW > 0 && this.ballHidden) {
+          Text('⋯')
+            .fontSize(20).fontColor('#FFFFFF').textAlign(TextAlign.Center)
+            .width(28).height(28).borderRadius(14).backgroundColor('#66202832')
+            .position({ x: this.surfaceW - 30, y: this.surfaceH / 2 - 14 }).zIndex(11)
+            .onClick(() => { this.ballHidden = false; })
+        }
+      }
+
+      // ── Windowed: small preview chrome + double-tap to enter fullscreen ──
+      if (this.windowed()) {
+        WindowedView({
+          statusText: statusLabel(this.connStatus),
+          onEnterFullscreen: () => { this.enterFullscreen(); },
+        })
+      }
+
+      // ── Idle (not streaming): status / how-to-connect ──
+      if (!this.streaming()) {
         IdleView({
           statusText: statusLabel(this.connStatus),
           statusDot: statusColor(this.connStatus),
@@ -143,34 +234,7 @@ struct Index {
         })
       }
 
-      // Paused banner — safe way back when input capture is paused.
-      if (this.connStatus === ConnectionStatus.Streaming && this.inputDisabled) {
-        PausedBanner({ surfaceW: this.surfaceW, onResume: () => { this.setInputDisabled(false); } })
-      }
-
-      // Floating control — last child so it z-orders above the touch overlay; its
-      // own gestures consume only touches on the 56vp circle. Tap = drawing toggle,
-      // long-press = open the control panel.
-      if (this.surfaceW > 0 && !this.ballHidden) {
-        FloatingBall({
-          drawing: $isDrawingMode,
-          ballX: $ballX,
-          ballY: $ballY,
-          screenW: this.surfaceW,
-          screenH: this.surfaceH,
-          onMenu: () => { this.showPanel = true; },
-        })
-      }
-      // Tiny restore handle when the ball is hidden.
-      if (this.surfaceW > 0 && this.ballHidden) {
-        Text('⋯')
-          .fontSize(20).fontColor('#FFFFFF').textAlign(TextAlign.Center)
-          .width(28).height(28).borderRadius(14).backgroundColor('#66202832')
-          .position({ x: this.surfaceW - 30, y: this.surfaceH / 2 - 14 }).zIndex(11)
-          .onClick(() => { this.ballHidden = false; })
-      }
-
-      // Control panel — top-most overlay (settings / cheat-sheet / toggles).
+      // Control panel — top-most overlay (openable when idle or in fullscreen).
       if (this.showPanel) {
         ControlPanel({
           statusText: statusLabel(this.connStatus),
@@ -181,7 +245,9 @@ struct Index {
           isDrawingMode: $isDrawingMode,
           ballHidden: $ballHidden,
           inputDisabled: this.inputDisabled,
+          showExitFullscreen: this.fullscreen(),
           onToggleInput: (v: boolean) => { this.setInputDisabled(v); },
+          onExitFullscreen: () => { this.exitFullscreen(); },
           onClose: () => { this.showPanel = false; },
         })
       }
