@@ -1,56 +1,49 @@
 # Superconnect — HarmonyOS (Pad) app
 
-Tablet-side app. Phase 0 = a TCP server that speaks the Superconnect wire
-protocol: it accepts the Mac's connection (tunnelled over USB by `hdc fport`),
-replies `hello_ack` to `hello`, and `pong` to `ping`, showing a live log on
-screen.
+Tablet-side receiver: accepts the Mac's connection (tunnelled over USB by `hdc fport`),
+negotiates caps (`hello_ack`), decodes the incoming HEVC/H.264 stream on the hardware
+`OH_VideoDecoder` and renders it onto an `XComponent` surface, and sends touch / pen /
+keyboard / trackpad input back over the INPUT channel. Launches in a small windowed
+preview; double-tap → immersive fullscreen (exit via the notification bar).
 
-## What's here (the meaningful, stable parts)
+## Layout (mirrors the Mac app's layering)
 
 ```
-harmony/
-├── AppScope/app.json5
+harmony/                       # a complete, buildable DevEco Studio project
+├── build-profile.json5        # signingConfigs:[] — use DevEco "automatic signing" (no certs committed)
+├── hvigorfile.ts · oh-package.json5 · hvigor/   # build scaffolding
+├── AppScope/                  # app.json5 (bundle com.superconnect.pad) + resources/media (icon)
 └── entry/src/main/
-    ├── module.json5                         # ability + ohos.permission.INTERNET
+    ├── module.json5
     ├── ets/
-    │   ├── entryability/EntryAbility.ets
-    │   ├── pages/Index.ets                   # status + log UI; starts the server
-    │   ├── protocol/FrameCodec.ets           # framing — matches proto/vectors.json
-    │   ├── transport/TcpServerTransport.ets  # @ohos.net.socket TCP server (L0/L1)
-    │   └── session/Session.ets               # CONTROL handshake (hello/ping)
-    ├── cpp/                                  # Phase 1 native module (placeholder)
-    └── resources/base/...                    # strings/colors/pages
+    │   ├── app/AppEnvironment.ets            # composition root (selects the role engine)
+    │   ├── models/                           # Role · ConnectionStatus · StreamInfo · Peer · DisplayMode
+    │   ├── services/                         # ConnectionManager · connection/{ConnectionEngine,role/*} · discovery · WindowMode · FullscreenNotification
+    │   ├── input/                            # InputRouter · KeyboardHandler · GestureController · FrameInputSender
+    │   ├── ui/                               # IdleView · WindowedView · ControlPanel · PausedBanner · Theme
+    │   ├── protocol/  session/  transport/   # FrameCodec · InputCodec · Session (handshake) · TcpServerTransport
+    │   └── pages/Index.ets                   # thin @Entry: XComponent + overlays + state
+    ├── cpp/                                  # OH_VideoDecoder (surface mode) + napi bridge (video_decoder.* , napi_init.cpp)
+    └── resources/
 ```
 
-## How to build & run (DevEco Studio)
+## Build & run (DevEco Studio)
 
-These sources target **HarmonyOS NEXT / 5.x (API 12+)**. The build system files
-(`build-profile.json5`, `oh-package.json5`, `hvigor/`) are intentionally **not**
-committed because they are DevEco-version-specific. Easiest path:
+Targets **HarmonyOS NEXT (API 12+)**. This is a self-contained project — no shell-project step.
 
-1. Install **DevEco Studio** + HarmonyOS SDK (and the **Command Line Tools**, which
-   provide `hdc` — add its `toolchains/` to your `PATH`; see `tools/`).
-2. In DevEco: **Create Project → Empty Ability**, bundle name `com.superconnect.pad`,
-   device type **Tablet**, language **ArkTS**, the API level matching your MatePad.
-3. Replace the generated `entry/src/main/ets/` with the files here, and merge:
-   - `module.json5` → add the `ohos.permission.INTERNET` block.
-   - `resources/base/profile/main_pages.json` → ensure it lists `pages/Index`.
+1. Install **DevEco Studio** + the HarmonyOS SDK (and the **Command Line Tools** for `hdc`).
+2. Open this `harmony/` folder in DevEco; run **`ohpm install`** to fetch dependencies.
+3. **Signing**: `build-profile.json5` ships with `signingConfigs: []` (no certs committed). In
+   **File → Project Structure → Signing Configs**, enable **"Automatically generate signature"**
+   to sign with your own Huawei developer identity.
 4. Enable **Developer Mode + USB debugging** on the tablet; connect USB; trust the host.
-5. **Run** ▶ to install via `hdc` and launch. The screen shows
-   `status: listening 127.0.0.1:8888`.
-6. On the Mac, set up the tunnel and run the demo client (see repo `README.md` /
-   `tools/`): `tools/fport.sh` then `swift run superconnect-mac`.
+5. **Run** ▶ to install + launch. On the Mac, start the host (the `Superconnect.app` menu/window,
+   or `tools/sc-loop.sh`); the tablet shows the Mac screen.
 
-You should see the tablet log `client connected` → `received hello` and the Mac
-print `handshake OK` + three RTT measurements.
+CLI build (after signing is configured): `hvigorw assembleHap -p product=default -p buildMode=debug`.
 
-## ArkTS strictness note
+## Cross-language wire format
 
-If the strict ArkTS linter in your DevEco/SDK version flags any socket type name
-(`socket.SocketMessageInfo`, `TCPSendOptions`) or the dynamic JSON cast in
-`Session.ets`, adjust to your SDK's exact `.d.ts` signatures — the **logic and
-the wire format** are what matter and are covered by `proto/vectors.json`.
-
-> The framing in `FrameCodec.ets` is verified byte-identical to the Mac (Swift)
-> and the portable C++ via the shared golden vectors. You can sanity-check the
-> Swift/C++ side today with no device (`mac/` tests and `shared/cpp/tests`).
+`protocol/FrameCodec.ets` + `protocol/InputCodec.ets` are verified byte-identical to the Mac
+(Swift) and the portable C++ via the shared golden vectors (`proto/vectors.json`). You can
+sanity-check the Swift/C++ side with no device (`mac/` tests + `shared/cpp/tests`).

@@ -55,7 +55,7 @@ hdc -v && tools/check-device.sh   # 应列出设备，而非 [Empty]
 
 ## 3. DevEco：构建 / 签名 / 安装 .hap
 
-**为什么不直接 `hap` 这个目录**：本仓库**故意不含** `build-profile.json5 / oh-package.json5 / hvigor/ / resources/base/media/`（这些与 DevEco 版本强相关）。正确做法是让 DevEco 生成工程壳，再把我们的源码放进去。
+**构建说明（已更新）**：`harmony/` 现在是**完整可构建的 DevEco 工程**（已含 `build-profile.json5 / oh-package.json5 / hvigor/ / resources/.../media`）。直接用 DevEco 打开 `harmony/` → `ohpm install` → 在 **Project Structure → Signing Configs** 开启「自动签名」→ Run 即可。`setWindowKeepScreenOn(true)` 已实现（`EntryAbility.ets`）。下方早期"建壳工程 / 待加"的步骤已过时，仅保留备查；权威步骤见 **`harmony/README.md`**。
 
 1. **建壳工程**：DevEco → New → Create Project → **Native C++** 模板（它已内置"Add C++ to Module"接线 + 默认图标）。
    - Bundle name：`com.superconnect.pad`；Language：ArkTS；Stage 模型；**API 12（HarmonyOS 5.0）**（设备是 5.0.1/5.1 就选对应 API）；Device type 勾 **Tablet**（可同时留 Default）。

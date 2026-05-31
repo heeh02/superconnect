@@ -17,9 +17,9 @@
 | M-Pencil 压感手写（跨应用，无需 DriverKit） | ✅ |
 | 触控板：光标/单击/右键/滚动/捏合/拖锁 | ✅ 已接通（仍有缺陷，见路线图 P2） |
 | 手指触控（类 iPad 触控板 + 双模式 + 悬浮球） | ✅ |
-| Mac 菜单栏 GUI（设备为中心，自动检测，有线/无线标识） | ✅ |
-| 静止画面缓存帧画质下降 | 🔧 已定位根因，待修（路线图 P1） |
-| 小窗启动 + 双击进全屏 + 通知栏退出 | 🔧 已设计，待实现（路线图 P1） |
+| Mac 窗口式 GUI（设备仪表盘 + 菜单栏快捷入口，自动检测，有线/无线标识） | ✅ |
+| 静止画面画质（空闲改 P 帧细化，不再发糊） | ✅ |
+| 小窗启动 + 双击进全屏 + 通知栏退出 | ✅ |
 | 对称多设备（任意设备主/从） | 🧭 架构已预留接缝（Role/ConnectionEngine） |
 
 ## 架构总览
@@ -44,7 +44,7 @@ superconnect/
 ├── mac/                  # macOS 端 (Swift, SwiftPM)
 │   ├── Sources/SuperconnectCore/      # FrameCodec / InputCodec / Transport / Session
 │   ├── Sources/SuperconnectProducer/  # VirtualDisplay / ScreenCapture / VideoEncoder / Producer / InputInjector
-│   ├── Sources/superconnect-app/      # 菜单栏 GUI（MVVM：App/Models/Services/ViewModels/Views）
+│   ├── Sources/superconnect-app/      # 窗口式 GUI（MVVM：App/Models/Services/ViewModels/Views）
 │   ├── Sources/superconnect-mac/      # 生产端 CLI（造屏→采集→编码→推流→收 INPUT）
 │   ├── Sources/superconnect-probe/    # 探针（造屏/采集/编码/HDR dump 诊断）
 │   └── Tests/                         # 断言 proto/vectors.json

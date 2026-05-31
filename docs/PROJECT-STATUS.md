@@ -113,7 +113,7 @@ export PATH=$JAVA_HOME/bin:/Applications/DevEco-Studio.app/Contents/tools/node/b
 HDC=/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc
 "$HDC" install -r entry/build/default/outputs/default/entry-default-signed.hap
 "$HDC" fport tcp:8888 tcp:8888
-"$HDC" shell aa start -a EntryAbility -b com.example.superconnect
+"$HDC" shell aa start -a EntryAbility -b com.superconnect.pad
 ```
 > 注意:平板需**解锁 + 应用在前台**(应用本身就是 Mac 的屏幕);USB-HDC 接口偶尔会掉,重插数据线即可,host 循环会自动重连。
 
@@ -152,7 +152,7 @@ HDC=/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/
 
 ## 10. 本阶段(2026-05-31)做了什么 —— 可维护性升级 + GUI + 现状梳理
 
-1. **Mac 端菜单栏 GUI(MVVM)** —— 设备为中心、自动检测、右下角有线/无线标识,UI 与逻辑分离,预留对称多设备接口。
+1. **Mac 端窗口式 GUI(MVVM)** —— 独立窗口设备仪表盘(侧栏设备 + 右侧详情/连接/权限) + 菜单栏快捷入口;设备为中心、自动检测、右下角有线/无线标识,UI 与逻辑分离,预留对称多设备接口。
 2. **平板端代码仓库可维护性升级** —— 单体 `Index.ets`(740→210 行)拆分,建立与 Mac **镜像的分层**:`models/`(Role/ConnectionStatus/StreamInfo/Peer)、`services/`(ConnectionManager)、`services/connection/`(ConnectionEngine + TunnelService + role/{Receiver,Host}Connection)、`services/discovery/`、`input/`、`ui/`、`protocol/`、`session/`、`transport/`,加 `app/AppEnvironment` 组合根。
 3. **角色接缝(对称多设备前置)** —— `ConnectionEngine` 接口 + `Role`(Receiver/Host)。平板 `ReceiverConnection` 为真实角色、`HostConnection` 为桩(与 Mac 一真一桩对称镜像)。启用"平板投出"对称未来 = 改 `AppEnvironment.engineForRole` 一行。
 4. **统一状态模型** —— 页面改用 `ConnectionStatus` 枚举(替代裸字符串),空闲界面显示干净文案(等待 Mac 连接 / 已连接)。

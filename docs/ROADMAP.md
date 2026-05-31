@@ -17,7 +17,7 @@
 | **物理键盘 + 虚拟键盘** | 快捷键/具名键 `onKeyPreIme` 预 IME 消费并以原始键回传；可打印 + 中文 IME 合成走 `onChange` 提交为 Unicode 文本。**两者均正常，本项收尾。** |
 | 手写笔压感（M-Pencil） | ArkUI `TouchEvent`(sourceTool=Pen) + `pressure/tilt` + `getHistoricalPoints`，Mac 侧 `CGEvent` tablet 子类型 + proximity 包裹。跨应用真压感，无需 DriverKit |
 | 触控板光标/单击/右键/滚动/捏合缩放/拖锁 | 见已知问题（仍有缺陷，列为 P2） |
-| Mac 端菜单栏 GUI（MVVM） | 设备为中心、自动检测、右下角有线/无线标识，预留对称多设备接口 |
+| Mac 端窗口式 GUI（MVVM） | 独立窗口设备仪表盘（侧栏设备 + 右侧详情/连接/权限）+ 菜单栏快捷入口；自动检测、有线/无线标识，预留对称多设备接口 |
 | 平板端代码仓库可维护性升级 | 单体 `Index.ets`(740→210) 拆分；与 Mac 镜像的分层（Models/Services/Connection/Role/Engine/Discovery + `AppEnvironment` 组合根 + 统一 `ConnectionStatus`）；输入/UI/协议分层 |
 | 统一应用图标 | 星座/GH 图标（仅存在于 DevEco 工程，仓库待补，见 §4） |
 
@@ -25,7 +25,9 @@
 
 ## 2. 待办（🔧 TODO，按优先级）
 
-### P1 — 静止画面缓存帧导致画质下降（显示质量回归）
+### ✅ 已完成（v0）— 静止画面画质（曾因缓存帧发糊）
+**状态**：已修复（commit `eefcc06`）。空闲心跳改为重发 **P 帧**（编码器细化并保持静止画面），关键帧只在最后一次真实帧后 ~2s 的同步窗内强制（`Producer.swift` `lastRealFrameNs`/`idleSyncWindowNs`）。下方为历史根因分析，保留备查。
+
 **现象**：屏幕很久没动后，画面变软/发糊（"缓存帧导致画质下降"）。
 
 **根因（已定位）**：编码器用 `kVTCompressionPropertyKey_AverageBitRate` + `ExpectedFrameRate = fps`（`mac/Sources/SuperconnectProducer/VideoEncoder.swift:75-76`），ABR 速率控制把每帧预算约束为 `码率 ÷ fps`（50Mbps/60fps ≈ 104KB/帧）。空闲时心跳每 ~0.8s 强制重发一个**关键帧**（`Producer.swift:58-64`，`allowSkipKeyframe:false`），但每个关键帧仍被钉在"按 60fps 计的单帧预算"内 —— 一个整帧 intra 远不够用，于是被高度量化，**静止画面被一帧帧更软的关键帧替换**，越放越糊。
@@ -37,7 +39,8 @@
 
 > 建议：方案 1 直击症状且顺带省流，必要时叠加方案 2（对真正发出的那一帧）。
 
-### P1 — 平板端：小窗启动 + 双击进全屏 + 通知栏退出（多设备前置）
+### ✅ 已完成（v0）— 平板端：小窗启动 + 双击进全屏 + 通知栏退出
+**状态**：已实现（commit `4c7df70`）。`DisplayMode{Windowed,Fullscreen}` 状态机：连接后小窗预览（不转发输入）→ 双击进沉浸全屏（输入转发 + 发"退出全屏"通知，含控制面板兜底）。下方为原始需求，保留备查。
 **需求**：连数据线、Mac 确认后**不要**立刻进全屏；先在**应用内小窗**显示画面；用户**双击**后进全屏；进全屏后利用**通知栏**，用户可在通知栏点击**退出全屏**。
 
 **动机**：面向多设备 —— 将来可能同时管理多路投屏/多窗口，自动全屏过于武断。
