@@ -150,7 +150,7 @@ export class Session {
       const d: display.Display = display.getDefaultDisplaySync();
       sw = d.width;
       sh = d.height;
-      scale = d.densityPixels;
+      scale = Math.max(1, Math.round(d.densityPixels));   // integer backing scale (not the raw density)
       refresh = d.refreshRate;
     } catch (e) {
       this.log('display query failed: ' + JSON.stringify(e));

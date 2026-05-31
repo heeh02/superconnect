@@ -157,15 +157,28 @@ final class HostConnection: ConnectionEngine {
 
     // MARK: - Caps → config
 
+    /// Build a virtual display matching ANY tablet's panel from its reported caps. Adapts to
+    /// arbitrary resolution + refresh; clamps the long edge to an encoder-safe size (preserving
+    /// aspect) and forces even pixels so the H.264/HEVC encoder is happy on any device.
     private func displayConfig(from caps: [String: Any]?) -> VirtualDisplayConfig {
         guard let caps,
-              let sw = (caps["screenWidth"] as? NSNumber)?.intValue,
-              let sh = (caps["screenHeight"] as? NSNumber)?.intValue,
-              sw >= 640, sh >= 400 else { return VirtualDisplayConfig() }
+              let rawW = (caps["screenWidth"] as? NSNumber)?.intValue,
+              let rawH = (caps["screenHeight"] as? NSNumber)?.intValue,
+              rawW >= 640, rawH >= 400 else { return VirtualDisplayConfig() }
         let scale = 2
+        var pw = rawW, ph = rawH
+        // Cap the long edge (codec level limits) preserving aspect — a no-op for current tablets.
+        let maxEdge = 4096
+        if max(pw, ph) > maxEdge {
+            let f = Double(maxEdge) / Double(max(pw, ph))
+            pw = Int((Double(pw) * f).rounded()); ph = Int((Double(ph) * f).rounded())
+        }
+        // Backing pixels divisible by 2×scale ⇒ whole point dims and even pixels (encoder-safe).
+        let step = 2 * scale
+        pw -= pw % step; ph -= ph % step
         let reported = (caps["refreshRate"] as? NSNumber)?.doubleValue ?? 60
         let refresh = max(30, min(Double(maxFps), reported))
-        return VirtualDisplayConfig(pointWidth: sw / scale, pointHeight: sh / scale, scale: scale, refreshRate: refresh)
+        return VirtualDisplayConfig(pointWidth: pw / scale, pointHeight: ph / scale, scale: scale, refreshRate: refresh)
     }
 
     private func codec(from caps: [String: Any]?) -> VideoCodec {

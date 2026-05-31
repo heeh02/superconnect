@@ -63,19 +63,23 @@
 
 ---
 
-## 3. 多设备方向（🧭 长期）
+## 3. 版本路线：v0（当前）→ v1（to-do）
 
-目标：**任意设备均可作为主设备投屏，或作为从设备被投屏**（对称角色）。架构已为此预留：
+### v0 — 华为平板 ↔ Mac（当前版本）
+**目标**：任意华为平板作为 Mac 的有线副屏。Mac = 主机（造屏 / 采集 / 编码 / 投出），平板 = 从机（解码 / 显示 + 回传触控 / 笔 / 键盘）。
+- **设备适配（任意华为平板）**：平板握手时上报 caps（`screenWidth/Height`、`refreshRate`、`scale`、`codecs`、`pen`、`hdr`；`session/Session.ets`）；Mac 据此**动态**创建虚拟屏（`HostConnection.displayConfig` → `CGVirtualDisplay`，`VirtualDisplay.ets` 按 config 建模）——任意分辨率 / 刷新率自适应，长边按编码器上限裁剪、强制偶数像素。**换一台华为平板无需改代码。**
+- **约束 / to-do**：平板需 **HarmonyOS NEXT（API 12+）**（应用为 NEXT HAP，旧版 HarmonyOS 4.x 装不上）；当前**一次一路**连接（同时多机属 Layer A，见 v1）；旋转 / 分辨率中途变化暂不重协商（to-do）。
 
-- **角色接缝**：`ConnectionEngine` + `Role`（Receiver/Host）。Mac 与平板均已是 `HostConnection`/`ReceiverConnection` 一真一桩，启用对称未来 = 改 `AppEnvironment.engineForRole` 一行 + 实现对应桩。
-- **Layer A（近期）**：每会话一条连接、以 `peerId` 索引，零线协议改动即可多设备并存。
-- **Layer B（远期）**：`sessionId` 复用单连接，延后。
-
-待办协议阶段（见 `ARCHITECTURE.md` 的演进策略）：
-- **Phase 2**：协议一致性测试台（golden vectors 跨 Swift/ArkTS/C++ 校验自动化）。
-- **Phase 5**：向后兼容的 v2 握手（`peerId` + host/receiver 角色协商 + 能力位 + 保留字段）。
-- **Phase 6**：多会话注册表（Layer A）。
-- Phase 7–9（延后）：Mac 作接收端、平板作主机端、1→N 协调器。
+### v1 — 全平台互联（to-do，长期目标）🧭
+**目标**：**任意设备（Windows / macOS / iOS / HarmonyOS / Android）均可作为主机投出，或作为从机接收，运行时自由选择角色。**
+- **架构已预留对称角色**：`ConnectionEngine` + `Role`（Host / Receiver）。每端已是 `HostConnection` / `ReceiverConnection` 一真一桩；启用某端的对称方向 = 实现对应桩 + 改 `AppEnvironment.engineForRole` 一行，其余层不动。
+- **逐平台落地**：每平台各自实现 Host（屏幕采集 + 编码 + 输入注入）与 Receiver（解码 + 渲染 + 输入采集）引擎；线协议（`proto/`）跨平台复用、已用 golden vectors 锁定一致性。
+- **依赖的协议演进**（见 `ARCHITECTURE.md`）：
+  - **Phase 2**：协议一致性测试台（golden vectors 跨 Swift / ArkTS / C++ 自动校验）。
+  - **Phase 5**：向后兼容 v2 握手（`peerId` + host/receiver 角色协商 + 能力位 + 保留字段）。
+  - **Phase 6**：多会话注册表（Layer A：每会话一连接、`peerId` 索引，零线协议改动即可多机并存）。
+  - **Layer B（远期）**：`sessionId` 复用单连接。
+  - Phase 7–9：Mac 作接收端、平板作主机端、1→N 协调器。
 
 ---
 
