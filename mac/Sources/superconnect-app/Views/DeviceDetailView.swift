@@ -1,0 +1,96 @@
+import SwiftUI
+
+/// The detail pane for the selected device: header + connect control + (when connected) live
+/// telemetry + a Permissions section (Screen Recording / Accessibility, with a grant button) +
+/// read-only negotiated info. Reuses ConnectionToggle / AdvancedPanel / StatusDot / TransportBadge.
+struct DeviceDetailView: View {
+    @ObservedObject var vm: AppViewModel
+    let device: Device
+
+    private var deviceState: ConnectionState { device.id == vm.connectedDeviceID ? vm.state : .idle }
+    private var isThisConnected: Bool { vm.connectedDeviceID == device.id && vm.isConnected }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                header
+                ConnectionToggle(vm: vm)
+
+                if isThisConnected, let t = vm.telemetry {
+                    GroupBox("画面") { AdvancedPanel(telemetry: t).padding(6) }
+                }
+
+                GroupBox("权限") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        permRow("屏幕录制", vm.screenRecordingOK)
+                        permRow("辅助功能（输入注入）", vm.accessibilityOK)
+                        if !(vm.screenRecordingOK && vm.accessibilityOK) {
+                            Button("授予权限 / 打开系统设置") { vm.requestPermissions() }
+                                .controlSize(.small)
+                            Text("重新打包应用后权限会被系统重置，需重新授予。")
+                                .font(.caption).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                }
+
+                GroupBox("连接信息") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        infoRow("传输", device.transport == .wired ? "有线 (USB)" : "无线")
+                        infoRow("画面", vm.telemetry.map { "\($0.resolution) · \($0.codec.uppercased())" } ?? "连接后显示")
+                        Text("分辨率 / 刷新率 / 编码 / 码率由 Mac 与平板自动协商。")
+                            .font(.caption).foregroundStyle(.tertiary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(24)
+            .frame(maxWidth: 560, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .navigationTitle(device.name)
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "ipad.landscape").font(.system(size: 32)).foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(device.name).font(.title2).fontWeight(.semibold)
+                HStack(spacing: 8) {
+                    StatusDot(state: deviceState)
+                    Text(stateText).font(.subheadline).foregroundStyle(.secondary)
+                    TransportBadge(kind: device.transport)
+                }
+            }
+            Spacer()
+        }
+    }
+
+    private var stateText: String {
+        switch deviceState {
+        case .connected:       return "已连接 · 投屏中"
+        case .connecting:      return "连接中…"
+        case .needsPermission: return "需要权限"
+        case .failed:          return "连接失败"
+        case .idle:            return "未连接"
+        }
+    }
+
+    private func permRow(_ label: String, _ ok: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(ok ? Color.green : Color.orange)
+            Text(label)
+            Spacer()
+            Text(ok ? "已授权" : "未授权").foregroundStyle(.secondary)
+        }
+    }
+
+    private func infoRow(_ label: String, _ value: String) -> some View {
+        HStack { Text(label).foregroundStyle(.secondary); Spacer(); Text(value) }
+    }
+}

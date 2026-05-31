@@ -2,15 +2,15 @@ import AppKit
 import SwiftUI
 import Combine
 
-/// Menu-bar (accessory) entry point: a status item whose popover hosts `RootView`. No
-/// dock icon, no auto-start — the user opens the popover, picks a device, and connects.
+/// Windowed app: a main window hosts the device dashboard (sidebar + detail), and a menu-bar
+/// status item gives quick access + reflects connection state. Dock icon present (.regular).
 @main
 struct SuperconnectApp {
     static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
-        app.setActivationPolicy(.accessory)
+        app.setActivationPolicy(.regular)   // Dock icon + main window (was .accessory/menu-bar-only)
         app.run()
     }
 }
@@ -18,23 +18,34 @@ struct SuperconnectApp {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let env = AppEnvironment()
     private var statusItem: NSStatusItem!
-    private let popover = NSPopover()
+    private var window: NSWindow!
     private var bag = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        buildMainMenu()
+
+        // Main window hosting the unified dashboard.
+        let content = NSHostingController(rootView: DashboardView(vm: env.viewModel))
+        let win = NSWindow(contentViewController: content)
+        win.title = "Superconnect"
+        win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        win.setContentSize(NSSize(width: 900, height: 580))
+        win.center()
+        win.setFrameAutosaveName("SuperconnectMain")
+        win.isReleasedWhenClosed = false
+        window = win
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Menu-bar quick access + state glyph.
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "display", accessibilityDescription: "Superconnect")
             button.image?.isTemplate = true
-            button.action = #selector(togglePopover(_:))
+            button.action = #selector(showWindow(_:))
             button.target = self
         }
 
-        popover.behavior = .transient
-        popover.contentSize = NSSize(width: 320, height: 440)
-        popover.contentViewController = NSHostingController(rootView: RootView(vm: env.viewModel))
-
-        // Reflect connection state in the menu-bar glyph.
         env.viewModel.$state
             .receive(on: RunLoop.main)
             .sink { [weak self] state in
@@ -46,18 +57,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &bag)
     }
 
-    @objc private func togglePopover(_ sender: Any?) {
-        guard let button = statusItem.button else { return }
-        if popover.isShown {
-            popover.performClose(sender)
-        } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            NSApp.activate(ignoringOtherApps: true)
-        }
+    @objc private func showWindow(_ sender: Any?) {
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Re-show the window when the Dock icon is clicked with no visible window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows { window.makeKeyAndOrderFront(nil) }
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         env.coordinator.disconnect()
         env.store.stop()
+    }
+
+    /// Minimal app menu so Cmd-Q / Hide work in a .regular (non-SwiftUI-lifecycle) app.
+    private func buildMainMenu() {
+        let mainMenu = NSMenu()
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "隐藏 Superconnect", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "隐藏其他", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h").keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "退出 Superconnect", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+
+        let winItem = NSMenuItem()
+        mainMenu.addItem(winItem)
+        let winMenu = NSMenu(title: "窗口")
+        winMenu.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        winMenu.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        winItem.submenu = winMenu
+
+        NSApp.mainMenu = mainMenu
     }
 }

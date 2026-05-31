@@ -24,4 +24,15 @@ enum SystemPermissions {
             return nil
         }
     }
+
+    /// Read-only status (no prompts / no side effects) for the GUI's permissions section.
+    static func hostStatus() -> (screenRecording: Bool, accessibility: Bool) {
+        (ScreenCapture.hasScreenRecordingPermission(), InputInjector.hasAccessibilityPermission())
+    }
+
+    /// Trigger the grant flow (opens System Settings panes) for whatever host gates are missing.
+    static func requestHost() {
+        if !ScreenCapture.hasScreenRecordingPermission() { ScreenCapture.requestScreenRecordingPermission() }
+        if !InputInjector.hasAccessibilityPermission() { InputInjector.requestAccessibilityPermission() }
+    }
 }
