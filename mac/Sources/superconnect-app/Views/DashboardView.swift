@@ -5,6 +5,7 @@ import SwiftUI
 /// Shaped for multi-device (the sidebar lists all); one active connection at a time today.
 struct DashboardView: View {
     @ObservedObject var vm: AppViewModel
+    @State private var newWirelessIP: String = ""
 
     var body: some View {
         NavigationSplitView {
@@ -40,10 +41,40 @@ struct DashboardView: View {
                     set: { if let id = $0 { vm.select(id) } }   // routes through the mid-connection guard
                 )) { device in
                     SidebarRow(device: device, state: vm.state(for: device.id))
+                        .contextMenu {
+                            if vm.isManualWireless(device.id) {
+                                Button("移除此无线设备", role: .destructive) {
+                                    vm.removeManualWirelessDevice(device.id)
+                                }
+                            }
+                        }
                 }
                 .listStyle(.sidebar)
             }
+            Divider()
+            addWirelessFooter
         }
+    }
+
+    /// Footer: add a tablet by IP for wireless connect (the mDNS-blocked fallback). Accepts
+    /// "192.168.1.5" or "192.168.1.5:9000"; the tablet must have 「无线模式」 turned on.
+    @ViewBuilder private var addWirelessFooter: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "wifi").foregroundStyle(.secondary).font(.caption)
+            TextField("平板 IP（无线）", text: $newWirelessIP)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { submitWirelessIP() }
+            Button("添加") { submitWirelessIP() }
+                .disabled(newWirelessIP.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+    }
+
+    private func submitWirelessIP() {
+        let text = newWirelessIP.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+        vm.addManualWirelessDevice(text)
+        newWirelessIP = ""
     }
 
     /// Sidebar header dot: connected if ANY device is connected, busy if any is connecting.

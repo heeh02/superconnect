@@ -8,15 +8,17 @@ final class AppEnvironment {
     let viewModel: AppViewModel
 
     init() {
+        let manual = ManualDiscovery()
         store = DeviceStore(sources: [
             WiredDiscovery(),
-            // WirelessDiscovery(),   // ← enable Wi-Fi: implement WirelessDiscovery, then uncomment
+            manual,                  // wireless: user-entered IPs (mDNS-blocked fallback)
+            // WirelessDiscovery(),  // wireless: mDNS/Bonjour auto-discovery (Inc4)
         ])
         coordinator = ConnectionCoordinator(
             tunnelFor: { kind in kind == .wired ? HdcFportTunnel() as TunnelService : DirectTunnel() as TunnelService },
             engineFor: { _ in HostConnection() }   // future: .host→HostConnection / .receiver→ReceiverConnection
         )
-        viewModel = AppViewModel(store: store, coordinator: coordinator)
+        viewModel = AppViewModel(store: store, coordinator: coordinator, manual: manual)
         store.start()   // discover immediately so the popover isn't empty on first open
     }
 }
