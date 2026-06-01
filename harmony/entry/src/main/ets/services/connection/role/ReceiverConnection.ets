@@ -14,11 +14,11 @@ export class ReceiverConnection implements ConnectionEngine {
   // '0.0.0.0' (LAN). Read at start() time so a wireless toggle + restart() picks up the new value.
   private bindAddressFn: () => string;
   // Wireless TOFU gate (null ⇒ no gate). Passed to each transport so LAN clients need approval.
-  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null;
+  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number) => Promise<boolean>) | null;
   // Fired when the socket starts listening — WirelessService advertises over mDNS when on LAN.
   private onListeningFn: ((address: string, port: number) => void) | null;
-  // Fired with a disconnecting client's peerId — WirelessService clears a stale pairing prompt.
-  private onClientGoneFn: ((peerId: string) => void) | null;
+  // Fired with a disconnecting client's clientId — WirelessService clears its stale pairing prompt.
+  private onClientGoneFn: ((ownerId: number) => void) | null;
   private transport: TcpServerTransport | null = null;
   // Serializes restart() so two quick wireless toggles can't race close+relisten into a zombie
   // listener / EADDRINUSE — each toggle's close→relisten runs strictly after the previous one.
@@ -29,9 +29,9 @@ export class ReceiverConnection implements ConnectionEngine {
 
   constructor(port: number,
               bindAddressFn: () => string = (): string => '127.0.0.1',
-              pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null = null,
+              pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number) => Promise<boolean>) | null = null,
               onListeningFn: ((address: string, port: number) => void) | null = null,
-              onClientGoneFn: ((peerId: string) => void) | null = null) {
+              onClientGoneFn: ((ownerId: number) => void) | null = null) {
     this.port = port;
     this.bindAddressFn = bindAddressFn;
     this.pairingGate = pairingGate;
@@ -77,7 +77,11 @@ export class ReceiverConnection implements ConnectionEngine {
    * Any in-flight stream drops; the page falls back to "listening". The wired start/stop is untouched.
    */
   restart(): Promise<void> {
-    this.restartChain = this.restartChain.then((): Promise<void> => this.doRestart());
+    // .catch keeps the chain self-healing: a single failed restart must not poison the chain (which
+    // would silently kill ALL future wireless toggles) nor surface as an unhandled rejection.
+    this.restartChain = this.restartChain
+      .then((): Promise<void> => this.doRestart())
+      .catch((e: Object): void => { this.onLog?.('restart failed ' + JSON.stringify(e)); });
     return this.restartChain;
   }
 
@@ -87,7 +91,7 @@ export class ReceiverConnection implements ConnectionEngine {
     if (t !== null) {
       try { await t.stop(); } catch (e) { this.onLog?.('transport stop ' + JSON.stringify(e)); }
     }
-    this.start();
+    try { this.start(); } catch (e) { this.onLog?.('relisten failed ' + JSON.stringify(e)); }
   }
 
   // Input frames flow out over the same transport. The closure reads transport at call time.

@@ -45,6 +45,7 @@ struct Index {
   @State private wifiIp: string = '';   // tablet's Wi‑Fi IPv4 for manual connect ('' if not on Wi‑Fi)
   @State private pairingVisible: boolean = false;   // TOFU prompt showing?
   @State private pairingName: string = '';          // the requesting Mac's name (for the prompt)
+  @State private pairingPromptId: number = 0;        // id binding this dialog to its prompt (anti-swap)
   @State private pairedPeers: TrustedPeer[] = [];            // trusted Macs (shown in the control panel)
   // Bumped by EntryAbility.onNewWant when the "exit fullscreen" notification is tapped.
   @StorageLink('scExitFullscreen') @Watch('onExitFsRequest') private exitFsReq: number = 0;
@@ -75,8 +76,9 @@ struct Index {
     this.wirelessOn = this.env.wireless.enabled();
     this.wifiIp = this.env.wireless.wifiIpv4();
     // TOFU pairing prompts from LAN clients surface here as a 允许/拒绝 dialog.
-    this.env.wireless.onPairingRequest = (peerId: string, deviceName: string): void => {
+    this.env.wireless.onPairingRequest = (peerId: string, deviceName: string, promptId: number): void => {
       this.pairingName = deviceName;
+      this.pairingPromptId = promptId;
       this.pairingVisible = true;
     };
     this.env.wireless.onPairingDismiss = (): void => { this.pairingVisible = false; };
@@ -298,8 +300,9 @@ struct Index {
   }
 
   // User answered the TOFU prompt (allow → remember + handshake proceeds; deny → refuse this run).
+  // The promptId binds the answer to the dialog that was shown — a stale tap is ignored by WirelessService.
   private respondPairing(allow: boolean): void {
-    this.env?.wireless.respondPairing(allow);
+    this.env?.wireless.respondPairing(this.pairingPromptId, allow);
     this.pairingVisible = false;
   }
 

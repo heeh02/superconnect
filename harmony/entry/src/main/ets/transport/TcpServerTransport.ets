@@ -25,9 +25,10 @@ export class TcpServerTransport {
   // Fired once the socket is listening (after listen succeeds). WirelessService uses this to
   // advertise over mDNS only when bound to the LAN (0.0.0.0). Null on the wired path.
   onListening: ((address: string, port: number) => void) | null = null;
-  // Fired when a client disconnects, with its peerId — lets WirelessService clear a pairing prompt
-  // owned by a peer that went away (no late trust, dialog dismissed). Null on the wired path.
-  onClientGone: ((peerId: string) => void) | null = null;
+  // Fired when a client disconnects, with its transport-assigned clientId — lets WirelessService
+  // clear a pairing prompt owned by a peer that went away (no late trust, dialog dismissed). Keyed on
+  // clientId (not the spoofable peerId) so only the owning connection can cancel. Null on wired path.
+  onClientGone: ((ownerId: number) => void) | null = null;
 
   constructor(log: (s: string) => void,
               onStatus: (s: string) => void,
@@ -80,6 +81,7 @@ export class TcpServerTransport {
       const session: Session = new Session(sendFn, this.log);
       session.onVideo = this.onVideo;
       session.onVideoConfig = this.onVideoConfig;
+      session.setOwnerId(client.clientId);   // cancel-owner identity (transport-assigned, not spoofable)
       if (this.pairingGate !== null) { session.setPairingGate(this.pairingGate); }
       // Determine localhost (hdc/USB) vs LAN so the pairing gate exempts wired clients.
       // When bound to 127.0.0.1 EVERY client is local by construction (the wired/USB path) — decide
@@ -105,7 +107,8 @@ export class TcpServerTransport {
       client.on('close', (): void => {
         this.onStatus('client disconnected');
         // If this client owned an in-flight pairing prompt, free it (dialog clears, no late trust).
-        if (this.onClientGone !== null) { this.onClientGone(session.getPeerId()); }
+        // Keyed on the transport-assigned clientId so only THIS connection can cancel its prompt.
+        if (this.onClientGone !== null) { this.onClientGone(client.clientId); }
         session.dispose();   // remove the rotation listener for this session
         // Only clear the sender if it's still the active client.
         if (client.clientId === this.currentClientId) {

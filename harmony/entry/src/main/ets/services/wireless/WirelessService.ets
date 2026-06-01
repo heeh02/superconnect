@@ -42,8 +42,15 @@ export class WirelessService {
   private pendingPeerId: string = '';
   private pendingDeviceName: string = '';
   private pendingTimer: number = -1;
-  // UI hooks (the page shows/hides the 允许/拒绝 dialog).
-  onPairingRequest: ((peerId: string, deviceName: string) => void) | null = null;
+  // Identity of the in-flight prompt. ownerId = the transport-assigned clientId (NOT the spoofable
+  // peerId) — only the owning connection may cancel its prompt. promptId = a monotonic id stamped
+  // per prompt — the user's 允许/拒绝 must carry it, so a tap can never settle a different prompt that
+  // replaced this one (no cancel-then-reprompt tap hijack).
+  private pendingOwnerId: number = 0;
+  private pendingPromptId: number = 0;
+  private promptSeq: number = 0;
+  // UI hooks (the page shows/hides the 允许/拒绝 dialog). promptId binds the dialog to its prompt.
+  onPairingRequest: ((peerId: string, deviceName: string, promptId: number) => void) | null = null;
   onPairingDismiss: (() => void) | null = null;
 
   constructor(ctx: common.UIAbilityContext) {
@@ -118,7 +125,7 @@ export class WirelessService {
    * Resolves false (reject) when wireless is off, the peer is anonymous, already denied this run, or
    * a prompt is unanswered for PAIR_TIMEOUT_MS.
    */
-  evaluatePairing(peerId: string, deviceName: string, isLocalhost: boolean): Promise<boolean> {
+  evaluatePairing(peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number): Promise<boolean> {
     if (isLocalhost) { return Promise.resolve(true); }            // hdc/USB → always trusted
     if (!this.enabledFlag) { return Promise.resolve(false); }     // wireless off → refuse LAN
     if (peerId === '') { return Promise.resolve(false); }         // can't TOFU an anonymous peer
@@ -133,21 +140,32 @@ export class WirelessService {
       this.pendingResolve = resolve;
       this.pendingPeerId = peerId;
       this.pendingDeviceName = deviceName;
+      this.pendingOwnerId = ownerId;
+      this.pendingPromptId = ++this.promptSeq;
+      const promptId: number = this.pendingPromptId;
       this.pendingTimer = setTimeout((): void => { this.settlePending(false, false); }, PAIR_TIMEOUT_MS);
-      if (this.onPairingRequest !== null) { this.onPairingRequest(peerId, deviceName); }
+      if (this.onPairingRequest !== null) { this.onPairingRequest(peerId, deviceName, promptId); }
     });
   }
 
-  /** The user tapped 允许 (true) or 拒绝 (false) in the pairing dialog. */
-  respondPairing(allow: boolean): void { this.settlePending(allow, !allow); }
+  /**
+   * The user tapped 允许 (true) or 拒绝 (false). `promptId` is the id the dialog was shown with — a
+   * stale tap (its prompt already settled/replaced) is IGNORED, so a tap can never approve a different
+   * peer that took the slot after the dialog was dismissed/re-shown.
+   */
+  respondPairing(promptId: number, allow: boolean): void {
+    if (this.pendingResolve !== null && promptId === this.pendingPromptId) {
+      this.settlePending(allow, !allow);
+    }
+  }
 
   /**
-   * A connecting peer's session closed (or it gave up). If it owns the in-flight prompt, clear it
-   * immediately (dialog dismissed + slot freed) instead of waiting out the 60s timeout — so a peer
-   * that disconnected mid-prompt can't be trusted by a late tap, and the next peer isn't blocked.
+   * The owning connection (by transport-assigned clientId — NOT the spoofable peerId) closed/gave up.
+   * Only that exact connection can clear its prompt, so a different peer can't cancel a legit prompt.
+   * Frees the slot immediately (dialog dismissed) instead of waiting out the 60s timeout.
    */
-  cancelPairing(peerId: string): void {
-    if (this.pendingResolve !== null && peerId !== '' && peerId === this.pendingPeerId) {
+  cancelPairing(ownerId: number): void {
+    if (this.pendingResolve !== null && ownerId === this.pendingOwnerId) {
       this.settlePending(false, false);
     }
   }
@@ -165,6 +183,8 @@ export class WirelessService {
     const peerId: string = this.pendingPeerId;
     const name: string = this.pendingDeviceName;
     this.pendingResolve = null;
+    this.pendingOwnerId = 0;
+    this.pendingPromptId = 0;
     this.pendingPeerId = '';
     this.pendingDeviceName = '';
     if (resolve === null) { return; }

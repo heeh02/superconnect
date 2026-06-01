@@ -22,10 +22,10 @@ export class AppEnvironment {
     const receiver: ReceiverConnection = new ReceiverConnection(
       port,
       (): string => this.wireless.bindAddress(),
-      (peerId: string, deviceName: string, isLocalhost: boolean): Promise<boolean> =>
-        this.wireless.evaluatePairing(peerId, deviceName, isLocalhost),
+      (peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number): Promise<boolean> =>
+        this.wireless.evaluatePairing(peerId, deviceName, isLocalhost, ownerId),
       (address: string, listenPort: number): void => this.wireless.onListening(address, listenPort),
-      (peerId: string): void => this.wireless.cancelPairing(peerId),
+      (ownerId: number): void => this.wireless.cancelPairing(ownerId),
     );
     const engineForRole = (role: Role): ConnectionEngine => {
       return role === Role.Host ? new HostConnection() : receiver;

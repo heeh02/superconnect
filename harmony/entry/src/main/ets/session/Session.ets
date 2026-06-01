@@ -72,9 +72,11 @@ export class Session {
   private clientLocalhost: boolean = false;
   private clientInfoResolved: boolean = false;
   private clientInfoWaiters: (() => void)[] = [];
+  // Transport-assigned connection id (clientId) — the cancel owner for this session's pairing prompt.
+  private ownerId: number = 0;
   // Wireless TOFU gate (set by the transport when wireless is on). Given (peerId, deviceName,
-  // isLocalhost), resolves true to allow the handshake. Null ⇒ no gate (wired) ⇒ always allow.
-  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null = null;
+  // isLocalhost, ownerId), resolves true to allow the handshake. Null ⇒ no gate (wired) ⇒ always allow.
+  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number) => Promise<boolean>) | null = null;
 
   /** Called by the transport once the client's remote address resolves (always, even on error). */
   setClientLocalhost(v: boolean): void {
@@ -85,13 +87,13 @@ export class Session {
     for (const w of waiters) { w(); }
   }
 
+  /** The transport's per-connection clientId — used to cancel this session's pairing prompt. */
+  setOwnerId(id: number): void { this.ownerId = id; }
+
   /** Install the wireless pairing gate (the transport does this per connection when wireless is on). */
-  setPairingGate(fn: (peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>): void {
+  setPairingGate(fn: (peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number) => Promise<boolean>): void {
     this.pairingGate = fn;
   }
-
-  /** The connected Mac's peerId ('' until hello / for a v1 peer). Used to cancel a stale pairing prompt. */
-  getPeerId(): string { return this.peerId; }
 
   /** Resolve once the client's localhost-vs-LAN tag is known, so the gate sees an accurate value. */
   private awaitClientInfo(): Promise<void> {
@@ -230,7 +232,7 @@ export class Session {
       await this.awaitClientInfo();   // ensure localhost-vs-LAN is known before deciding
       let allowed: boolean = false;
       try {
-        allowed = await this.pairingGate(this.peerId, deviceName, this.clientLocalhost);
+        allowed = await this.pairingGate(this.peerId, deviceName, this.clientLocalhost, this.ownerId);
       } catch (e) {
         this.log('pairing gate error ' + JSON.stringify(e));
         allowed = false;
