@@ -10,12 +10,18 @@ import sc from 'libsuperconnect.so';
 // the tablet's HostConnection is the stub. Selected by AppEnvironment's engineForRole.
 export class ReceiverConnection implements ConnectionEngine {
   private port: number;
+  // Where to bind — supplied by WirelessService via AppEnvironment: '127.0.0.1' (USB only) or
+  // '0.0.0.0' (LAN). Read at start() time so a wireless toggle + restart() picks up the new value.
+  private bindAddressFn: () => string;
   private transport: TcpServerTransport | null = null;
   onStatus?: (s: ConnectionStatus) => void;
   onStreamInfo?: (info: StreamInfo) => void;
   onLog?: (msg: string) => void;
 
-  constructor(port: number) { this.port = port; }
+  constructor(port: number, bindAddressFn: () => string = (): string => '127.0.0.1') {
+    this.port = port;
+    this.bindAddressFn = bindAddressFn;
+  }
 
   start(): void {
     this.transport = new TcpServerTransport(
@@ -35,10 +41,30 @@ export class ReceiverConnection implements ConnectionEngine {
         this.onLog?.('decoder armed ' + width + '×' + height + ' ' + codec + ' hdr=' + hdr);
       },
     );
-    this.transport.start(this.port);
+    this.transport.start(this.port, this.bindAddressFn());
   }
 
-  stop(): void { this.transport = null; }   // (transport has no explicit close today)
+  stop(): void {
+    const t: TcpServerTransport | null = this.transport;
+    this.transport = null;
+    // Close the listen socket (best-effort) so a later re-listen doesn't hit EADDRINUSE.
+    t?.stop().catch((e: Object): void => { this.onLog?.('transport close ' + JSON.stringify(e)); });
+  }
+
+  /**
+   * Rebind to the CURRENT bindAddressFn() — called when the wireless mode is toggled. Closes the
+   * old listener first (awaited) so the port is free, then re-listens on the new address. Any
+   * in-flight stream drops; the page falls back to "listening". Wireless-only side door; the wired
+   * lifecycle (start/stop) is untouched.
+   */
+  async restart(): Promise<void> {
+    const t: TcpServerTransport | null = this.transport;
+    this.transport = null;
+    if (t !== null) {
+      try { await t.stop(); } catch (e) { this.onLog?.('transport stop ' + JSON.stringify(e)); }
+    }
+    this.start();
+  }
 
   // Input frames flow out over the same transport. The closure reads transport at call time.
   frameSink(): (bytes: Uint8Array) => void {

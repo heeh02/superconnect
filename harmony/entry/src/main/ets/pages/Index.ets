@@ -38,6 +38,9 @@ struct Index {
   @State private vWidth: number = 0;           // live stream resolution / codec (from video_config)
   @State private vHeight: number = 0;
   @State private vCodec: string = '';
+  // Wireless (Wi‑Fi LAN) mode — owned by AppEnvironment.wireless; mirrored here for the UI toggle.
+  @State private wirelessOn: boolean = false;
+  @State private wifiIp: string = '';   // tablet's Wi‑Fi IPv4 for manual connect ('' if not on Wi‑Fi)
   // Bumped by EntryAbility.onNewWant when the "exit fullscreen" notification is tapped.
   @StorageLink('scExitFullscreen') @Watch('onExitFsRequest') private exitFsReq: number = 0;
   private kbd: KeyboardHandler | null = null;   // physical + soft keyboard → Mac (owns metaHeld)
@@ -60,9 +63,12 @@ struct Index {
     this.windowCtl.start();
     // Composition root selects the role engine (Receiver today); the manager owns the
     // connection lifecycle. The page just binds the view state it shows.
-    this.env = new AppEnvironment(this.port);
+    this.env = new AppEnvironment(this.port, this.ctx());
     const mgr: ConnectionManager = this.env.manager;
     this.manager = mgr;
+    // Reflect the persisted wireless state + current Wi‑Fi IP into the UI.
+    this.wirelessOn = this.env.wireless.enabled();
+    this.wifiIp = this.env.wireless.wifiIpv4();
     mgr.onLog = (msg: string): void => { this.appendLog(msg); };
     mgr.onStatus = (s: ConnectionStatus): void => {
       this.connStatus = s;
@@ -213,6 +219,9 @@ struct Index {
           statusText: statusLabel(this.connStatus),
           statusDot: statusColor(this.connStatus),
           port: this.port,
+          wirelessOn: this.wirelessOn,
+          wifiIp: this.wifiIp,
+          onToggleWireless: (v: boolean) => { this.setWireless(v); },
           onOpenPanel: () => { this.showPanel = true; },
         })
       }
@@ -225,6 +234,9 @@ struct Index {
           vWidth: this.vWidth,
           vHeight: this.vHeight,
           vCodec: this.vCodec,
+          wirelessOn: this.wirelessOn,
+          wifiIp: this.wifiIp,
+          onToggleWireless: (v: boolean) => { this.setWireless(v); },
           isDrawingMode: $isDrawingMode,
           ballHidden: $ballHidden,
           inputDisabled: this.inputDisabled,
@@ -244,6 +256,15 @@ struct Index {
     // Paused → reveal the tablet's own cursor; capturing → hide it (manager owns the cursor).
     this.manager?.setCaptureEnabled(!v);
     if (!v) { this.refocusIme(); }   // resuming capture → return keyboard focus to the IME catcher (#kbd-focus)
+  }
+
+  // Toggle Wi‑Fi LAN mode: WirelessService persists the choice + rebinds the listener (127.0.0.1 ↔
+  // 0.0.0.0); we refresh the shown IP. Wired (USB) connections are unaffected either way.
+  private setWireless(v: boolean): void {
+    this.env?.wireless.setEnabled(v);
+    this.wirelessOn = v;
+    this.wifiIp = this.env?.wireless.wifiIpv4() ?? '';
+    this.appendLog('wireless ' + (v ? 'ON (0.0.0.0)' : 'OFF (127.0.0.1)') + (v && this.wifiIp !== '' ? ' ip=' + this.wifiIp : ''));
   }
 
 }

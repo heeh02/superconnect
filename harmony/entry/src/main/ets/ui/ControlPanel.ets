@@ -10,6 +10,9 @@ export struct ControlPanel {
   @Prop vWidth: number = 0;
   @Prop vHeight: number = 0;
   @Prop vCodec: string = '';
+  @Prop wirelessOn: boolean = false;
+  @Prop wifiIp: string = '';
+  onToggleWireless?: (v: boolean) => void;
   @Link isDrawingMode: boolean;
   @Link ballHidden: boolean;
   @Prop inputDisabled: boolean = false;
@@ -42,6 +45,15 @@ export struct ControlPanel {
             this.InfoRow('端口', this.port.toString())
             this.InfoRow('分辨率', this.vWidth > 0 ? (this.vWidth + ' × ' + this.vHeight) : '—')
             this.InfoRow('编码', this.vCodec !== '' ? this.vCodec.toUpperCase() : '—')
+
+            this.Section('无线连接')
+            this.ToggleRow('无线模式 (Wi‑Fi)', this.wirelessOn, (v: boolean) => { this.onToggleWireless?.(v); })
+            this.InfoRow('Wi‑Fi 地址',
+              this.wirelessOn ? (this.wifiIp !== '' ? (this.wifiIp + ' : ' + this.port) : '未连接 Wi‑Fi') : '仅 USB')
+            Text(this.wirelessOn
+              ? '同一 Wi‑Fi 下的 Mac 可自动发现，或手动输入上面的地址连接。'
+              : '开启后可让同网段的 Mac 无线连接；关闭时仅支持数据线 (USB)。')
+              .fontSize(12).fontColor($r('sys.color.font_tertiary')).width('100%')
 
             this.Section('快捷开关')
             this.ToggleRow('绘画模式（手写笔）', this.isDrawingMode, (v: boolean) => { this.isDrawingMode = v; })

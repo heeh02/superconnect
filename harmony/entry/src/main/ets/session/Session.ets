@@ -66,6 +66,12 @@ export class Session {
   private textEncoder: util.TextEncoder = new util.TextEncoder();
   private textDecoder: util.TextDecoder = util.TextDecoder.create('utf-8');
   private peerId: string = '';   // v2 handshake: the connected Mac's peer id ('' if v1 peer)
+  // Set by TcpServerTransport from the client's remote address: true for hdc/USB (always 127.0.0.1),
+  // false for a LAN client. The wireless pairing gate (Inc3) exempts localhost; LAN needs approval.
+  private clientLocalhost: boolean = false;
+
+  /** Called by the transport once the client's remote address resolves. */
+  setClientLocalhost(v: boolean): void { this.clientLocalhost = v; }
 
   /** VIDEO-channel payloads (Annex-B H.264 access units) + keyframe flag. */
   onVideo: ((payload: Uint8Array, isKeyframe: boolean) => void) | null = null;

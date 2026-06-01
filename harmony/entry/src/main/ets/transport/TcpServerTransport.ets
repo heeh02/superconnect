@@ -36,11 +36,16 @@ export class TcpServerTransport {
     }
   }
 
-  start(port: number): void {
-    const addr: socket.NetAddress = { address: '127.0.0.1', port: port, family: 1 };
+  /**
+   * Listen for the Mac. `bindAddress` is the wired/wireless seam: '127.0.0.1' (default, USB-only via
+   * hdc fport) or '0.0.0.0' (LAN + localhost, set by WirelessService when wireless is on). Nothing
+   * else about the server differs between the two — Session and above stay transport-agnostic.
+   */
+  start(port: number, bindAddress: string = '127.0.0.1'): void {
+    const addr: socket.NetAddress = { address: bindAddress, port: port, family: 1 };
     this.server.listen(addr).then(() => {
-      this.onStatus('listening 127.0.0.1:' + port);
-      this.log('TCP server listening on 127.0.0.1:' + port);
+      this.onStatus('listening ' + bindAddress + ':' + port);
+      this.log('TCP server listening on ' + bindAddress + ':' + port);
     }).catch((err: Object) => {
       this.onStatus('listen failed');
       this.log('listen error: ' + JSON.stringify(err));
@@ -61,6 +66,14 @@ export class TcpServerTransport {
       const session: Session = new Session(sendFn, this.log);
       session.onVideo = this.onVideo;
       session.onVideoConfig = this.onVideoConfig;
+      // Tag this client as localhost (hdc/USB → always from 127.0.0.1) vs LAN, so the wireless
+      // pairing gate (Inc3) can exempt trusted wired clients. Resolves async; the gate awaits it.
+      client.getRemoteAddress().then((ra: socket.NetAddress): void => {
+        const local: boolean =
+          ra.address === '127.0.0.1' || ra.address === '::1' || ra.address === '::ffff:127.0.0.1';
+        session.setClientLocalhost(local);
+        this.log('client remote ' + ra.address + (local ? ' (localhost/USB)' : ' (LAN)'));
+      }).catch((e: Object): void => { this.log('getRemoteAddress failed ' + JSON.stringify(e)); });
 
       client.on('message', (value: socket.SocketMessageInfo): void => {
         session.onBytes(new Uint8Array(value.message));
@@ -76,5 +89,13 @@ export class TcpServerTransport {
         this.log('client closed');
       });
     });
+  }
+
+  /**
+   * Close the listening socket. Awaited by ReceiverConnection.restart() before re-listening on a
+   * new bind address (wireless toggle), so the port is free and we never hit EADDRINUSE.
+   */
+  stop(): Promise<void> {
+    return this.server.close();
   }
 }
