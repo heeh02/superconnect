@@ -43,7 +43,26 @@ cp .build/release/superconnect-app "$APP/Contents/MacOS/superconnect-app"
 cp app/Info.plist "$APP/Contents/Info.plist"
 cp app/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"   # constellation icon (matches the tablet)
 
+# Bundle hdc (+ its libusb) so the app is SELF-CONTAINED — the user needs NO DevEco install.
+# hdc's rpath is @loader_path/. so libusb_shared.dylib must sit right next to it.
+HDC_SRC=""
+for d in \
+  "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains" \
+  "/Applications/DevEco-Studio.app/Contents/tools/hdc" \
+  "$HOME/command-line-tools/sdk/default/openharmony/toolchains"; do
+  [ -x "$d/hdc" ] && { HDC_SRC="$d"; break; }
+done
+if [ -n "$HDC_SRC" ]; then
+  mkdir -p "$APP/Contents/Resources/hdc"
+  cp "$HDC_SRC/hdc" "$APP/Contents/Resources/hdc/"
+  [ -f "$HDC_SRC/libusb_shared.dylib" ] && cp "$HDC_SRC/libusb_shared.dylib" "$APP/Contents/Resources/hdc/"
+  echo "▸ bundled hdc + libusb from $HDC_SRC"
+else
+  echo "⚠️  hdc NOT found on this build machine — the app will need DevEco at runtime (not self-contained)"
+fi
+
 # Sign with the stable self-signed cert → TCC grants (Screen Recording / Accessibility) persist.
+# --deep signs the bundled hdc + libusb too.
 codesign --force --deep --sign "$CN" --keychain "$KC" "$APP"
 
 echo "✓ built $APP (signed: $CN)"
