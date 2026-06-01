@@ -33,6 +33,7 @@ final class HostConnection: ConnectionEngine {
     private let frameLock = NSLock()
     private var frames = 0
     private var lastFrames = 0
+    private var bytes = 0           // encoded bytes since the last telemetry tick (→ measured Mbps)
 
     private var running = false
     private var generation = 0
@@ -84,6 +85,7 @@ final class HostConnection: ConnectionEngine {
         tele.bitrateMbps = m
         telemetrySubject.send(tele)
         producer?.setBitrate(m * 1_000_000)
+        diag("setBitrate \(m)Mbps applied (producer=\(producer != nil))")
     }
 
     // MARK: - Session lifecycle (generation-guarded retry)
@@ -172,7 +174,7 @@ final class HostConnection: ConnectionEngine {
         prod.onEncoded = { [weak self] data, isKeyframe in
             transport.send(FrameCodec.encode(channel: .video, flags: isKeyframe ? .keyframe : [], payload: data))
             guard let self else { return }
-            self.frameLock.lock(); self.frames += 1; self.frameLock.unlock()
+            self.frameLock.lock(); self.frames += 1; self.bytes += data.count; self.frameLock.unlock()
             if self.stateSubject.value != .connected { self.stateSubject.send(.connected) }
         }
         self.producer = prod
@@ -230,10 +232,11 @@ final class HostConnection: ConnectionEngine {
         t.schedule(deadline: .now() + 2, repeating: 2)
         t.setEventHandler { [weak self] in
             guard let self else { return }
-            self.frameLock.lock(); let now = self.frames; self.frameLock.unlock()
+            self.frameLock.lock(); let now = self.frames; let b = self.bytes; self.bytes = 0; self.frameLock.unlock()
             let delta = now - self.lastFrames
             self.lastFrames = now
             self.tele.fps = max(0, delta / 2)
+            self.tele.actualMbps = Int((Double(b) * 8.0 / 2.0 / 1_000_000.0).rounded())   // measured output over the 2s window
             self.telemetrySubject.send(self.tele)
         }
         t.resume()

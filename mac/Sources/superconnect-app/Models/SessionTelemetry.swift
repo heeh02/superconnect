@@ -8,5 +8,6 @@ struct SessionTelemetry: Equatable {
     var fps: Int = 0
     var resolution: String = "—"
     var codec: String = "—"
-    var bitrateMbps: Int = 0
+    var bitrateMbps: Int = 0        // target (set) bitrate
+    var actualMbps: Int = 0         // measured output bitrate (encoded bytes/sec over the last window)
 }
