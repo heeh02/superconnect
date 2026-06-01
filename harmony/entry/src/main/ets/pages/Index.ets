@@ -5,8 +5,7 @@ import { AppEnvironment } from '../app/AppEnvironment';
 import { ConnectionStatus, statusLabel, statusColor } from '../models/ConnectionStatus';
 import { DisplayMode } from '../models/DisplayMode';
 import { StreamInfo } from '../models/StreamInfo';
-import { WindowMode } from '../services/WindowMode';
-import { FullscreenNotification } from '../services/FullscreenNotification';
+import { WindowController } from '../services/WindowController';
 import { FloatingBall } from '../components/FloatingBall';
 import { IdleView } from '../ui/IdleView';
 import { ControlPanel } from '../ui/ControlPanel';
@@ -45,6 +44,7 @@ struct Index {
   private env: AppEnvironment | null = null;    // composition root (selects the role engine)
   private manager: ConnectionManager | null = null;   // connection lifecycle (from env)
   private router: InputRouter | null = null;   // owns pen + trackpad + finger input (FSMs)
+  private windowCtl: WindowController | null = null;   // window-layout + fullscreen-notification side-effects
   private readonly port: number = 8888;
 
   private ctx(): common.UIAbilityContext { return getContext(this) as common.UIAbilityContext; }
@@ -56,8 +56,8 @@ struct Index {
                  sc.hdrDecodeCaps(), sc.supportsHevc() ? 1 : 0);
     } catch (e) { this.appendLog('hdrProbe ' + JSON.stringify(e)); }
     // Start windowed; ask once for notification permission (used by the fullscreen exit action).
-    WindowMode.apply(this.ctx(), DisplayMode.Windowed, (m: string): void => { this.appendLog(m); });
-    FullscreenNotification.enable(this.ctx(), (m: string): void => { this.appendLog(m); });
+    this.windowCtl = new WindowController(this.ctx(), (m: string): void => { this.appendLog(m); });
+    this.windowCtl.start();
     // Composition root selects the role engine (Receiver today); the manager owns the
     // connection lifecycle. The page just binds the view state it shows.
     this.env = new AppEnvironment(this.port);
@@ -115,8 +115,7 @@ struct Index {
 
   private enterFullscreen(): void {
     this.displayMode = DisplayMode.Fullscreen;
-    WindowMode.apply(this.ctx(), DisplayMode.Fullscreen, (m: string): void => { this.appendLog(m); });
-    FullscreenNotification.show(this.ctx(), (m: string): void => { this.appendLog(m); });
+    this.windowCtl?.enterFullscreen();
     // ImeCatcher grabs focus itself when `active` flips true — no manual refocus needed here.
   }
 
@@ -131,8 +130,7 @@ struct Index {
 
   private exitFullscreen(): void {
     this.displayMode = DisplayMode.Windowed;
-    WindowMode.apply(this.ctx(), DisplayMode.Windowed, (m: string): void => { this.appendLog(m); });
-    FullscreenNotification.cancel((m: string): void => { this.appendLog(m); });
+    this.windowCtl?.exitFullscreen();
   }
 
   // Watcher for the notification "exit fullscreen" action (AppStorage bump from EntryAbility).
