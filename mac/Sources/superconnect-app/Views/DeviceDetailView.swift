@@ -27,6 +27,13 @@ struct DeviceDetailView: View {
                             Text("\(Int(vm.bitrateMbps)) Mbps")
                         }
                         Slider(value: $vm.bitrateMbps, in: 10...100, step: 5)
+                        if isThisConnected, let t = deviceTelemetry, t.actualMbps > 0 {
+                            HStack {
+                                Text("实际输出").foregroundStyle(.secondary)
+                                Spacer()
+                                Text("\(t.actualMbps) Mbps").monospacedDigit()
+                            }
+                        }
                         Text("越高越清晰、越占带宽。连接时拖动实时生效；未连接时的设置会在连接后应用。")
                             .font(.caption).foregroundStyle(.tertiary)
                     }

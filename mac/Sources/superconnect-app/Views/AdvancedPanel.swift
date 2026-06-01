@@ -12,8 +12,6 @@ struct AdvancedPanel: View {
                 row("分辨率", telemetry.resolution)
                 row("编码", telemetry.codec)
                 row("帧率", telemetry.fps > 0 ? "\(telemetry.fps) fps" : "—")
-                row("目标码率", telemetry.bitrateMbps > 0 ? "\(telemetry.bitrateMbps) Mbps" : "—")
-                row("实际码率", telemetry.actualMbps > 0 ? "\(telemetry.actualMbps) Mbps" : "—")
             }
             .padding(.top, 4)
         }
