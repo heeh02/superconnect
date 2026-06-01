@@ -14,6 +14,8 @@ import { WindowedView } from '../ui/WindowedView';
 import { ImeCatcher } from '../ui/ImeCatcher';
 import { InputOverlay } from '../ui/InputOverlay';
 import { RestoreHandle } from '../ui/RestoreHandle';
+import { PairingDialog } from '../ui/PairingDialog';
+import { TrustedPeer } from '../services/wireless/PairingStore';
 import { BallGeometry, BallPos } from '../components/BallGeometry';
 import { common } from '@kit.AbilityKit';
 import hilog from '@ohos.hilog';
@@ -41,6 +43,9 @@ struct Index {
   // Wireless (Wi‑Fi LAN) mode — owned by AppEnvironment.wireless; mirrored here for the UI toggle.
   @State private wirelessOn: boolean = false;
   @State private wifiIp: string = '';   // tablet's Wi‑Fi IPv4 for manual connect ('' if not on Wi‑Fi)
+  @State private pairingVisible: boolean = false;   // TOFU prompt showing?
+  @State private pairingName: string = '';          // the requesting Mac's name (for the prompt)
+  @State private pairedPeers: TrustedPeer[] = [];            // trusted Macs (shown in the control panel)
   // Bumped by EntryAbility.onNewWant when the "exit fullscreen" notification is tapped.
   @StorageLink('scExitFullscreen') @Watch('onExitFsRequest') private exitFsReq: number = 0;
   private kbd: KeyboardHandler | null = null;   // physical + soft keyboard → Mac (owns metaHeld)
@@ -69,6 +74,12 @@ struct Index {
     // Reflect the persisted wireless state + current Wi‑Fi IP into the UI.
     this.wirelessOn = this.env.wireless.enabled();
     this.wifiIp = this.env.wireless.wifiIpv4();
+    // TOFU pairing prompts from LAN clients surface here as a 允许/拒绝 dialog.
+    this.env.wireless.onPairingRequest = (peerId: string, deviceName: string): void => {
+      this.pairingName = deviceName;
+      this.pairingVisible = true;
+    };
+    this.env.wireless.onPairingDismiss = (): void => { this.pairingVisible = false; };
     mgr.onLog = (msg: string): void => { this.appendLog(msg); };
     mgr.onStatus = (s: ConnectionStatus): void => {
       this.connStatus = s;
@@ -196,7 +207,7 @@ struct Index {
             ballY: $ballY,
             screenW: this.surfaceW,
             screenH: this.surfaceH,
-            onMenu: () => { this.showPanel = true; },
+            onMenu: () => { this.openPanel(); },
           })
         }
         // Tiny restore handle when the ball is hidden.
@@ -222,7 +233,7 @@ struct Index {
           wirelessOn: this.wirelessOn,
           wifiIp: this.wifiIp,
           onToggleWireless: (v: boolean) => { this.setWireless(v); },
-          onOpenPanel: () => { this.showPanel = true; },
+          onOpenPanel: () => { this.openPanel(); },
         })
       }
 
@@ -237,6 +248,8 @@ struct Index {
           wirelessOn: this.wirelessOn,
           wifiIp: this.wifiIp,
           onToggleWireless: (v: boolean) => { this.setWireless(v); },
+          pairedPeers: this.pairedPeers,
+          onForgetPeer: (peerId: string) => { this.forgetPeer(peerId); },
           isDrawingMode: $isDrawingMode,
           ballHidden: $ballHidden,
           inputDisabled: this.inputDisabled,
@@ -244,6 +257,15 @@ struct Index {
           onToggleInput: (v: boolean) => { this.setInputDisabled(v); },
           onExitFullscreen: () => { this.exitFullscreen(); },
           onClose: () => { this.showPanel = false; this.refocusIme(); },   // panel buttons stole focus → give it back (#kbd-focus)
+        })
+      }
+
+      // TOFU pairing prompt — top-most, shown for an unknown LAN device until the user answers.
+      if (this.pairingVisible) {
+        PairingDialog({
+          deviceName: this.pairingName,
+          onAllow: () => { this.respondPairing(true); },
+          onDeny: () => { this.respondPairing(false); },
         })
       }
     }
@@ -265,6 +287,25 @@ struct Index {
     this.wirelessOn = v;
     this.wifiIp = this.env?.wireless.wifiIpv4() ?? '';
     this.appendLog('wireless ' + (v ? 'ON (0.0.0.0)' : 'OFF (127.0.0.1)') + (v && this.wifiIp !== '' ? ' ip=' + this.wifiIp : ''));
+  }
+
+  // Open the control panel, refreshing the live IP + paired-device list first.
+  private openPanel(): void {
+    this.wifiIp = this.env?.wireless.wifiIpv4() ?? '';
+    this.pairedPeers = this.env?.wireless.pairedPeers() ?? [];
+    this.showPanel = true;
+  }
+
+  // User answered the TOFU prompt (allow → remember + handshake proceeds; deny → refuse this run).
+  private respondPairing(allow: boolean): void {
+    this.env?.wireless.respondPairing(allow);
+    this.pairingVisible = false;
+  }
+
+  // Forget a previously-trusted Mac (it must re-pair next time).
+  private forgetPeer(peerId: string): void {
+    this.env?.wireless.forgetPeer(peerId);
+    this.pairedPeers = this.env?.wireless.pairedPeers() ?? [];
   }
 
 }

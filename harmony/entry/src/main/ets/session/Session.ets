@@ -49,6 +49,7 @@ interface ControlMsg {
   acceptedRole?: string;
   desiredRole?: string;
   appVersion?: string;
+  message?: string;      // error: human/machine-readable reason (e.g. "pairing_rejected")
 }
 
 // Stable peer id for the v2 handshake. Per-process for now; TODO: persist across launches via
@@ -69,9 +70,31 @@ export class Session {
   // Set by TcpServerTransport from the client's remote address: true for hdc/USB (always 127.0.0.1),
   // false for a LAN client. The wireless pairing gate (Inc3) exempts localhost; LAN needs approval.
   private clientLocalhost: boolean = false;
+  private clientInfoResolved: boolean = false;
+  private clientInfoWaiters: (() => void)[] = [];
+  // Wireless TOFU gate (set by the transport when wireless is on). Given (peerId, deviceName,
+  // isLocalhost), resolves true to allow the handshake. Null ⇒ no gate (wired) ⇒ always allow.
+  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null = null;
 
-  /** Called by the transport once the client's remote address resolves. */
-  setClientLocalhost(v: boolean): void { this.clientLocalhost = v; }
+  /** Called by the transport once the client's remote address resolves (always, even on error). */
+  setClientLocalhost(v: boolean): void {
+    this.clientLocalhost = v;
+    this.clientInfoResolved = true;
+    const waiters: (() => void)[] = this.clientInfoWaiters;
+    this.clientInfoWaiters = [];
+    for (const w of waiters) { w(); }
+  }
+
+  /** Install the wireless pairing gate (the transport does this per connection when wireless is on). */
+  setPairingGate(fn: (peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>): void {
+    this.pairingGate = fn;
+  }
+
+  /** Resolve once the client's localhost-vs-LAN tag is known, so the gate sees an accurate value. */
+  private awaitClientInfo(): Promise<void> {
+    if (this.clientInfoResolved) { return Promise.resolve(); }
+    return new Promise<void>((resolve: () => void): void => { this.clientInfoWaiters.push(resolve); });
+  }
 
   /** VIDEO-channel payloads (Annex-B H.264 access units) + keyframe flag. */
   onVideo: ((payload: Uint8Array, isKeyframe: boolean) => void) | null = null;
@@ -160,26 +183,10 @@ export class Session {
     }
 
     switch (msg.type) {
-      case 'hello': {
-        this.log('received hello from ' + (msg.role ?? 'peer') + ' v' + (msg.protocolVersion ?? 1));
-        this.peerId = msg.peerId ?? '';   // v2 peer identity ('' for a v1 peer)
-        const caps: HelloAckCaps = this.localCaps();
-        this.lastCapsW = caps.screenWidth;   // baseline so the first 'change' isn't a spurious re-negotiation
-        this.lastCapsH = caps.screenHeight;
-        this.sendControl({
-          type: 'hello_ack',
-          role: 'pad',
-          protocolVersion: 2,
-          // v2 (all additive — a v1 Mac ignores these): identity + the role this side accepts.
-          peerId: localPeerId(),
-          platform: 'harmonyos',
-          deviceName: 'HarmonyOS Tablet',
-          supportedRoles: ['receiver'],
-          acceptedRole: 'receiver',
-          caps: caps,
-        });
+      case 'hello':
+        // Async: the wireless pairing gate may await the user's 允许/拒绝 before we hello_ack.
+        this.onHello(msg);
         break;
-      }
       case 'ping':
         // Echo seq + original t0, add our own clock t1 (milliseconds).
         this.sendControl({
@@ -203,6 +210,49 @@ export class Session {
       default:
         this.log('unhandled control type: ' + msg.type);
     }
+  }
+
+  /**
+   * Handle a hello: run the wireless pairing gate (if installed), then reply hello_ack. The gate
+   * exempts localhost (hdc/USB) and already-trusted peers; an unknown LAN peer waits for the user's
+   * 允许. On rejection we send an error and send NO hello_ack, so the Mac surfaces a clear failure.
+   */
+  private async onHello(msg: ControlMsg): Promise<void> {
+    this.log('received hello from ' + (msg.role ?? 'peer') + ' v' + (msg.protocolVersion ?? 1));
+    this.peerId = msg.peerId ?? '';   // v2 peer identity ('' for a v1 peer)
+    const deviceName: string = msg.deviceName ?? 'Mac';
+
+    if (this.pairingGate !== null) {
+      await this.awaitClientInfo();   // ensure localhost-vs-LAN is known before deciding
+      let allowed: boolean = false;
+      try {
+        allowed = await this.pairingGate(this.peerId, deviceName, this.clientLocalhost);
+      } catch (e) {
+        this.log('pairing gate error ' + JSON.stringify(e));
+        allowed = false;
+      }
+      if (!allowed) {
+        this.log('pairing REJECTED for peer ' + this.peerId);
+        this.sendControl({ type: 'error', message: 'pairing_rejected' });
+        return;   // no hello_ack
+      }
+    }
+
+    const caps: HelloAckCaps = this.localCaps();
+    this.lastCapsW = caps.screenWidth;   // baseline so the first 'change' isn't a spurious re-negotiation
+    this.lastCapsH = caps.screenHeight;
+    this.sendControl({
+      type: 'hello_ack',
+      role: 'pad',
+      protocolVersion: 2,
+      // v2 (all additive — a v1 Mac ignores these): identity + the role this side accepts.
+      peerId: localPeerId(),
+      platform: 'harmonyos',
+      deviceName: 'HarmonyOS Tablet',
+      supportedRoles: ['receiver'],
+      acceptedRole: 'receiver',
+      caps: caps,
+    });
   }
 
   /** Advertise this tablet's panel (resolution, refresh) + HW-decodable codecs

@@ -1,4 +1,5 @@
 import { Theme } from './Theme';
+import { TrustedPeer } from '../services/wireless/PairingStore';
 
 // ControlPanel — the settings / cheat-sheet / quick-toggles overlay. Status + stream info
 // are passed in; the toggles bind two-way (@Link) except "pause input" which has a side
@@ -13,6 +14,8 @@ export struct ControlPanel {
   @Prop wirelessOn: boolean = false;
   @Prop wifiIp: string = '';
   onToggleWireless?: (v: boolean) => void;
+  @Prop pairedPeers: TrustedPeer[] = [];
+  onForgetPeer?: (peerId: string) => void;
   @Link isDrawingMode: boolean;
   @Link ballHidden: boolean;
   @Prop inputDisabled: boolean = false;
@@ -54,6 +57,21 @@ export struct ControlPanel {
               ? '同一 Wi‑Fi 下的 Mac 可自动发现，或手动输入上面的地址连接。'
               : '开启后可让同网段的 Mac 无线连接；关闭时仅支持数据线 (USB)。')
               .fontSize(12).fontColor($r('sys.color.font_tertiary')).width('100%')
+
+            this.Section('已配对设备')
+            if (this.pairedPeers.length === 0) {
+              Text('暂无。首次无线连接时在本机点「允许」即可记住该 Mac。')
+                .fontSize(12).fontColor($r('sys.color.font_tertiary')).width('100%')
+            } else {
+              ForEach(this.pairedPeers, (p: TrustedPeer) => {
+                Row() {
+                  Text(p.name !== '' ? p.name : 'Mac').fontSize(15).fontColor($r('sys.color.font_primary')).layoutWeight(1).maxLines(1)
+                  Button('移除').fontSize(13).height(30).fontColor(Theme.accent)
+                    .backgroundColor($r('sys.color.comp_background_secondary'))
+                    .onClick(() => { this.onForgetPeer?.(p.peerId); })
+                }.width('100%').padding({ top: 4, bottom: 4 })
+              }, (p: TrustedPeer) => p.peerId)
+            }
 
             this.Section('快捷开关')
             this.ToggleRow('绘画模式（手写笔）', this.isDrawingMode, (v: boolean) => { this.isDrawingMode = v; })

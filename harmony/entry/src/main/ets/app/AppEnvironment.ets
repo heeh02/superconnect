@@ -16,8 +16,13 @@ export class AppEnvironment {
 
   constructor(port: number, ctx: common.UIAbilityContext) {
     this.wireless = new WirelessService(ctx);
-    // The receiver binds where WirelessService says: 127.0.0.1 (USB only) or 0.0.0.0 (LAN).
-    const receiver: ReceiverConnection = new ReceiverConnection(port, (): string => this.wireless.bindAddress());
+    // The receiver binds where WirelessService says, and consults its TOFU gate for LAN clients.
+    const receiver: ReceiverConnection = new ReceiverConnection(
+      port,
+      (): string => this.wireless.bindAddress(),
+      (peerId: string, deviceName: string, isLocalhost: boolean): Promise<boolean> =>
+        this.wireless.evaluatePairing(peerId, deviceName, isLocalhost),
+    );
     const engineForRole = (role: Role): ConnectionEngine => {
       return role === Role.Host ? new HostConnection() : receiver;
     };

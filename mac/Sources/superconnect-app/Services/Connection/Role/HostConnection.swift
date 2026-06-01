@@ -144,7 +144,24 @@ final class HostConnection: ConnectionEngine {
             if let e = InputCodec.decode(data) { self?.currentInjector()?.inject(e) }   // injector read is locked
         }
         session.onText = { [weak self] t in self?.currentInjector()?.injectText(t) }
-        session.onError = { [weak self] _ in self?.lifeQ.async { self?.retry(gen: gen) } }
+        session.onError = { [weak self] msg in
+            guard let self else { return }
+            self.lifeQ.async {
+                guard self.running, gen == self.generation else { return }
+                // A wireless pairing rejection is FATAL: the tablet refused this Mac. Retrying would
+                // just re-prompt the tablet every 1.5s, so stop the lifecycle and surface a clear
+                // message. Bump the generation first so the imminent onClosed→retry guards out.
+                if msg.contains("pairing_rejected") {
+                    self.diag("pairing rejected by tablet — fatal (no retry)")
+                    self.generation += 1
+                    self.running = false
+                    self.teardownSession()
+                    self.stateSubject.send(.failed(.pairingRejected))
+                } else {
+                    self.retry(gen: gen)
+                }
+            }
+        }
         session.onClosed = { [weak self] in self?.lifeQ.async { self?.retry(gen: gen) } }
         session.start()
     }

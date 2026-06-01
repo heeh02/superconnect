@@ -6,17 +6,20 @@
  *    no LAN exposure at all.
  *  - ON: the receiver binds 0.0.0.0 → reachable over Wi‑Fi too (and, Inc4, advertised via mDNS).
  *
- * It persists the on/off choice across launches and exposes the tablet's current Wi‑Fi IPv4 so the
- * user can connect manually (the mDNS-blocked-network fallback). Everything wireless lives under
- * services/wireless/. The wired path knows nothing about this file.
+ * It also owns the TOFU pairing GATE: a LAN client must be approved (once) by the user before the
+ * handshake completes; localhost (hdc/USB) clients are auto-trusted. Persists the on/off choice and
+ * the trusted-peer list, and exposes the tablet's Wi‑Fi IPv4 for manual connect. Everything wireless
+ * lives under services/wireless/. The wired path knows nothing about this file.
  */
 import preferences from '@ohos.data.preferences';
 import wifiManager from '@ohos.wifiManager';
 import hilog from '@ohos.hilog';
 import { common } from '@kit.AbilityKit';
+import { PairingStore, TrustedPeer } from './PairingStore';
 
 const STORE: string = 'sc_wireless';
 const KEY_ENABLED: string = 'enabled';
+const PAIR_TIMEOUT_MS: number = 60000;   // auto-reject an unanswered pairing prompt after 60s
 
 export class WirelessService {
   private prefs: preferences.Preferences | null = null;
@@ -25,7 +28,22 @@ export class WirelessService {
   // Wired into the receiver by AppEnvironment: rebinds the listen socket to the new address.
   private restartFn: () => void = (): void => {};
 
+  // ── TOFU pairing ──
+  private pairing: PairingStore;
+  // Peers the user explicitly rejected THIS app run — silently refused (no re-prompt) until restart
+  // or until wireless is re-enabled.
+  private sessionDenied: string[] = [];
+  // At most one pairing prompt is in flight; its resolver gates the awaiting handshake.
+  private pendingResolve: ((allow: boolean) => void) | null = null;
+  private pendingPeerId: string = '';
+  private pendingDeviceName: string = '';
+  private pendingTimer: number = -1;
+  // UI hooks (the page shows/hides the 允许/拒绝 dialog).
+  onPairingRequest: ((peerId: string, deviceName: string) => void) | null = null;
+  onPairingDismiss: (() => void) | null = null;
+
   constructor(ctx: common.UIAbilityContext) {
+    this.pairing = new PairingStore(ctx);
     try {
       this.prefs = preferences.getPreferencesSync(ctx, { name: STORE });
       this.enabledFlag = this.prefs.getSync(KEY_ENABLED, false) as boolean;
@@ -45,6 +63,7 @@ export class WirelessService {
   setEnabled(v: boolean): void {
     if (v === this.enabledFlag) { return; }
     this.enabledFlag = v;
+    if (v) { this.sessionDenied = []; }   // re-enabling → give previously-denied peers a fresh prompt
     if (this.prefs !== null) {
       try {
         this.prefs.putSync(KEY_ENABLED, v);
@@ -73,4 +92,54 @@ export class WirelessService {
       return '';
     }
   }
+
+  // ── Pairing gate ──────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * The gate the Session awaits before sending hello_ack. Localhost (hdc/USB) and already-trusted
+   * peers pass instantly; an unknown LAN peer raises a 允许/拒绝 prompt and resolves on the user's tap.
+   * Resolves false (reject) when wireless is off, the peer is anonymous, already denied this run, or
+   * a prompt is unanswered for PAIR_TIMEOUT_MS.
+   */
+  evaluatePairing(peerId: string, deviceName: string, isLocalhost: boolean): Promise<boolean> {
+    if (isLocalhost) { return Promise.resolve(true); }            // hdc/USB → always trusted
+    if (!this.enabledFlag) { return Promise.resolve(false); }     // wireless off → refuse LAN
+    if (peerId === '') { return Promise.resolve(false); }         // can't TOFU an anonymous peer
+    if (this.pairing.isTrusted(peerId)) { return Promise.resolve(true); }
+    if (this.sessionDenied.indexOf(peerId) >= 0) { return Promise.resolve(false); }
+    // A new request supersedes any in-flight prompt (e.g. the previous client gave up). Don't deny
+    // the superseded peer — it may simply have lost the race.
+    this.settlePending(false, false);
+    return new Promise<boolean>((resolve: (allow: boolean) => void): void => {
+      this.pendingResolve = resolve;
+      this.pendingPeerId = peerId;
+      this.pendingDeviceName = deviceName;
+      this.pendingTimer = setTimeout((): void => { this.settlePending(false, false); }, PAIR_TIMEOUT_MS);
+      if (this.onPairingRequest !== null) { this.onPairingRequest(peerId, deviceName); }
+    });
+  }
+  private pendingDeviceName: string = '';
+
+  /** The user tapped 允许 (true) or 拒绝 (false) in the pairing dialog. */
+  respondPairing(allow: boolean): void { this.settlePending(allow, !allow); }
+
+  /** Resolve the in-flight prompt. allow ⇒ trust + remember; deny ⇒ session-deny (no re-prompt). */
+  private settlePending(allow: boolean, deny: boolean): void {
+    if (this.pendingTimer >= 0) { clearTimeout(this.pendingTimer); this.pendingTimer = -1; }
+    const resolve: ((allow: boolean) => void) | null = this.pendingResolve;
+    const peerId: string = this.pendingPeerId;
+    const name: string = this.pendingDeviceName;
+    this.pendingResolve = null;
+    this.pendingPeerId = '';
+    this.pendingDeviceName = '';
+    if (resolve === null) { return; }
+    if (allow && peerId !== '') { this.pairing.trust(peerId, name); }
+    if (deny && peerId !== '') { this.sessionDenied.push(peerId); }
+    if (this.onPairingDismiss !== null) { this.onPairingDismiss(); }
+    resolve(allow);
+  }
+
+  // ── Trusted-peer management (UI) ──
+  pairedPeers(): TrustedPeer[] { return this.pairing.list(); }
+  forgetPeer(peerId: string): void { this.pairing.forget(peerId); }
 }

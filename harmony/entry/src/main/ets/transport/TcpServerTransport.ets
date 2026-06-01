@@ -16,17 +16,22 @@ export class TcpServerTransport {
   private onStatus: (s: string) => void;
   private onVideo: ((payload: Uint8Array, isKeyframe: boolean) => void) | null;
   private onVideoConfig: ((width: number, height: number, codec: string, hdr: string) => void) | null;
+  // Wireless TOFU gate (null ⇒ wired/no gate). Installed onto each Session so an unknown LAN client
+  // must be approved before hello_ack. The wired path passes null → behavior unchanged.
+  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null;
   private currentSend: ((bytes: Uint8Array) => void) | null = null;
   private currentClientId: number = -1;
 
   constructor(log: (s: string) => void,
               onStatus: (s: string) => void,
               onVideo: ((payload: Uint8Array, isKeyframe: boolean) => void) | null = null,
-              onVideoConfig: ((width: number, height: number, codec: string, hdr: string) => void) | null = null) {
+              onVideoConfig: ((width: number, height: number, codec: string, hdr: string) => void) | null = null,
+              pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null = null) {
     this.log = log;
     this.onStatus = onStatus;
     this.onVideo = onVideo;
     this.onVideoConfig = onVideoConfig;
+    this.pairingGate = pairingGate;
   }
 
   /** Send a pre-framed message to the connected client (e.g. INPUT frames). */
@@ -66,14 +71,19 @@ export class TcpServerTransport {
       const session: Session = new Session(sendFn, this.log);
       session.onVideo = this.onVideo;
       session.onVideoConfig = this.onVideoConfig;
+      if (this.pairingGate !== null) { session.setPairingGate(this.pairingGate); }
       // Tag this client as localhost (hdc/USB → always from 127.0.0.1) vs LAN, so the wireless
       // pairing gate (Inc3) can exempt trusted wired clients. Resolves async; the gate awaits it.
+      // On failure, default to LAN (false) so the gate errs toward requiring approval (secure default).
       client.getRemoteAddress().then((ra: socket.NetAddress): void => {
         const local: boolean =
           ra.address === '127.0.0.1' || ra.address === '::1' || ra.address === '::ffff:127.0.0.1';
         session.setClientLocalhost(local);
         this.log('client remote ' + ra.address + (local ? ' (localhost/USB)' : ' (LAN)'));
-      }).catch((e: Object): void => { this.log('getRemoteAddress failed ' + JSON.stringify(e)); });
+      }).catch((e: Object): void => {
+        this.log('getRemoteAddress failed ' + JSON.stringify(e));
+        session.setClientLocalhost(false);   // unknown → treat as LAN (require pairing)
+      });
 
       client.on('message', (value: socket.SocketMessageInfo): void => {
         session.onBytes(new Uint8Array(value.message));

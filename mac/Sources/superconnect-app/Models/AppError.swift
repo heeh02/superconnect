@@ -9,6 +9,7 @@ enum AppError: Error, Equatable {
     case tunnelFailed
     case connectionFailed
     case receiverNotSupported
+    case pairingRejected
 
     var userMessage: String {
         switch self {
@@ -24,6 +25,8 @@ enum AppError: Error, Equatable {
             return "连接已断开，正在自动重连…"
         case .receiverNotSupported:
             return "此设备方向暂不支持（即将推出）"
+        case .pairingRejected:
+            return "平板未授权本机连接。请在平板上点「允许」配对后重试"
         }
     }
 }

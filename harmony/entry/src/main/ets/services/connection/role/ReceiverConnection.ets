@@ -13,14 +13,19 @@ export class ReceiverConnection implements ConnectionEngine {
   // Where to bind — supplied by WirelessService via AppEnvironment: '127.0.0.1' (USB only) or
   // '0.0.0.0' (LAN). Read at start() time so a wireless toggle + restart() picks up the new value.
   private bindAddressFn: () => string;
+  // Wireless TOFU gate (null ⇒ no gate). Passed to each transport so LAN clients need approval.
+  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null;
   private transport: TcpServerTransport | null = null;
   onStatus?: (s: ConnectionStatus) => void;
   onStreamInfo?: (info: StreamInfo) => void;
   onLog?: (msg: string) => void;
 
-  constructor(port: number, bindAddressFn: () => string = (): string => '127.0.0.1') {
+  constructor(port: number,
+              bindAddressFn: () => string = (): string => '127.0.0.1',
+              pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null = null) {
     this.port = port;
     this.bindAddressFn = bindAddressFn;
+    this.pairingGate = pairingGate;
   }
 
   start(): void {
@@ -40,6 +45,7 @@ export class ReceiverConnection implements ConnectionEngine {
         this.onStreamInfo?.({ width: width, height: height, codec: codec, hdr: hdr });
         this.onLog?.('decoder armed ' + width + '×' + height + ' ' + codec + ' hdr=' + hdr);
       },
+      this.pairingGate,
     );
     this.transport.start(this.port, this.bindAddressFn());
   }
