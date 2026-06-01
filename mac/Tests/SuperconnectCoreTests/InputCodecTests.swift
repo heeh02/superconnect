@@ -11,7 +11,7 @@ final class InputCodecTests: XCTestCase {
                    buttons: InputButtons.primary.rawValue,
                    flags: 0, timestampMs: 0,
                    x: 0.5, y: 0.25, pressure: 1.0,
-                   scrollX: 0, scrollY: 0, keyCode: 0, reserved: 0)
+                   scrollX: 0, scrollY: 0, keyCode: 0, pointerId: 0)
     }
 
     func testRecordSize() {
@@ -28,7 +28,7 @@ final class InputCodecTests: XCTestCase {
         let events = [
             InputEvent(type: 0, tool: 3, buttons: 1, flags: 0, timestampMs: 123456789,
                        x: 0.0, y: 1.0, pressure: 0.0, scrollX: -3.5, scrollY: 2.25,
-                       keyCode: 42, reserved: 7),
+                       keyCode: 42, pointerId: 7),
             InputEvent(type: 6, tool: 0, x: 0.999, y: 0.001, scrollX: 10, scrollY: -10),
             InputEvent(type: 2, tool: 1, x: 0.3333, y: 0.6667, pressure: 0.42),
         ]
@@ -48,7 +48,7 @@ final class InputCodecTests: XCTestCase {
             + "00000000"   // tiltY = 0
             + "00000000"   // scrollX = 0
             + "00000000"   // scrollY = 0
-            + "0000" + "0000"   // keyCode, reserved
+            + "0000" + "0000"   // keyCode, pointerId
         XCTAssertEqual(InputCodec.encode(sample()).hexEncodedString, golden)
     }
 }

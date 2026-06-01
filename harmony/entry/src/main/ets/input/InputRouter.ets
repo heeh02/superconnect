@@ -79,7 +79,7 @@ export class InputRouter {
       type: type, tool: tool, buttons: buttons, flags: 0,
       timestampMs: Date.now(), x: x, y: y,
       pressure: pressure, tiltX: tiltX, tiltY: tiltY,
-      scrollX: scrollX, scrollY: scrollY, keyCode: 0, reserved: 0,
+      scrollX: scrollX, scrollY: scrollY, keyCode: 0, pointerId: 0,
     };
     this.sender.sendInput(ev);
   }

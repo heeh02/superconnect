@@ -28,7 +28,7 @@ export class KeyboardHandler {
     const ev: InputEvent = {
       type: type, tool: InputTool.Finger, buttons: 0, flags: flags,
       timestampMs: Date.now(), x: 0, y: 0, pressure: 0, tiltX: 0, tiltY: 0,
-      scrollX: 0, scrollY: 0, keyCode: keyCode & 0xffff, reserved: 0,
+      scrollX: 0, scrollY: 0, keyCode: keyCode & 0xffff, pointerId: 0,
     };
     this.sender.sendInput(ev);
   }

@@ -36,7 +36,7 @@ export interface InputEvent {
   scrollX: number;
   scrollY: number;
   keyCode: number;
-  reserved: number;
+  pointerId: number;
 }
 
 export const INPUT_RECORD_SIZE: number = 44;
@@ -62,6 +62,6 @@ export function encodeInput(e: InputEvent): Uint8Array {
   dv.setFloat32(o, e.scrollX, true); o += 4;
   dv.setFloat32(o, e.scrollY, true); o += 4;
   dv.setUint16(o, e.keyCode & 0xffff, true); o += 2;
-  dv.setUint16(o, e.reserved & 0xffff, true); o += 2;
+  dv.setUint16(o, e.pointerId & 0xffff, true); o += 2;
   return new Uint8Array(buf);
 }

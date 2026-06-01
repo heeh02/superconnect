@@ -14,6 +14,21 @@ public final class Session {
     /// Peer capabilities announced in hello/hello_ack.
     public private(set) var peerCaps: [String: Any]?
 
+    /// v2 handshake peer identity/role (nil when talking to a v1 peer — treat as v1 defaults).
+    public private(set) var peerId: String?
+    public private(set) var peerPlatform: String?
+    public private(set) var peerAcceptedRole: String?
+    public private(set) var peerProtocolVersion: Int = 1
+
+    /// Stable per-install id (UUID), the trust/routing key for v2. Persisted in UserDefaults.
+    public static let localPeerId: String = {
+        let key = "com.superconnect.peerId"
+        if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty { return existing }
+        let id = UUID().uuidString
+        UserDefaults.standard.set(id, forKey: key)
+        return id
+    }()
+
     public var onLog: ((String) -> Void)?
     public var onConnected: (() -> Void)?        // fired after hello_ack
     public var onCapsUpdate: (([String: Any]) -> Void)?   // tablet panel caps changed (rotation/resolution)
@@ -63,8 +78,14 @@ public final class Session {
         sendControl([
             "type": "hello",
             "role": role,
-            "protocolVersion": 1,
+            "protocolVersion": 2,
             "app": "superconnect",
+            // v2 (all additive — a v1 peer ignores these): identity + role negotiation groundwork.
+            "peerId": Session.localPeerId,
+            "platform": "macos",
+            "deviceName": Host.current().localizedName ?? "Mac",
+            "supportedRoles": ["host"],
+            "desiredRole": "host",
             "caps": ["codecs": ["h264"], "maxWidth": 3840, "maxHeight": 2160, "hidpi": true],
         ])
     }
@@ -121,7 +142,11 @@ public final class Session {
         switch type {
         case "hello_ack":
             peerCaps = object["caps"] as? [String: Any]
-            onLog?("received hello_ack from peer")
+            peerId = object["peerId"] as? String
+            peerPlatform = object["platform"] as? String
+            peerAcceptedRole = object["acceptedRole"] as? String
+            peerProtocolVersion = (object["protocolVersion"] as? Int) ?? 1   // absent ⇒ v1 peer
+            onLog?("received hello_ack (v\(peerProtocolVersion) platform=\(peerPlatform ?? "?"))")
             onConnected?()
         case "caps_update":
             // Tablet rotated / changed resolution → updated panel caps. Re-negotiate the display.

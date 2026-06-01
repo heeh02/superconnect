@@ -41,6 +41,22 @@ interface ControlMsg {
   codec?: string;
   hdr?: string;          // video_config: "off" | "hlg" | "pq"
   caps?: HelloAckCaps;
+  // v2 handshake (all additive; a v1 peer omits these): identity + role negotiation.
+  peerId?: string;
+  platform?: string;
+  deviceName?: string;
+  supportedRoles?: string[];
+  acceptedRole?: string;
+  desiredRole?: string;
+  appVersion?: string;
+}
+
+// Stable peer id for the v2 handshake. Per-process for now; TODO: persist across launches via
+// @ohos.data.preferences so it's truly per-install (the trust/routing key for v1 multi-device).
+let MODULE_PEER_ID: string = '';
+function localPeerId(): string {
+  if (MODULE_PEER_ID.length === 0) { MODULE_PEER_ID = util.generateRandomUUID(true); }
+  return MODULE_PEER_ID;
 }
 
 export class Session {
@@ -49,6 +65,7 @@ export class Session {
   private log: LogFn;
   private textEncoder: util.TextEncoder = new util.TextEncoder();
   private textDecoder: util.TextDecoder = util.TextDecoder.create('utf-8');
+  private peerId: string = '';   // v2 handshake: the connected Mac's peer id ('' if v1 peer)
 
   /** VIDEO-channel payloads (Annex-B H.264 access units) + keyframe flag. */
   onVideo: ((payload: Uint8Array, isKeyframe: boolean) => void) | null = null;
@@ -138,14 +155,21 @@ export class Session {
 
     switch (msg.type) {
       case 'hello': {
-        this.log('received hello from ' + (msg.role ?? 'peer'));
+        this.log('received hello from ' + (msg.role ?? 'peer') + ' v' + (msg.protocolVersion ?? 1));
+        this.peerId = msg.peerId ?? '';   // v2 peer identity ('' for a v1 peer)
         const caps: HelloAckCaps = this.localCaps();
         this.lastCapsW = caps.screenWidth;   // baseline so the first 'change' isn't a spurious re-negotiation
         this.lastCapsH = caps.screenHeight;
         this.sendControl({
           type: 'hello_ack',
           role: 'pad',
-          protocolVersion: 1,
+          protocolVersion: 2,
+          // v2 (all additive — a v1 Mac ignores these): identity + the role this side accepts.
+          peerId: localPeerId(),
+          platform: 'harmonyos',
+          deviceName: 'HarmonyOS Tablet',
+          supportedRoles: ['receiver'],
+          acceptedRole: 'receiver',
           caps: caps,
         });
         break;

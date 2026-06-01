@@ -49,7 +49,7 @@ public struct InputFlags: OptionSet, Sendable {
 ///   pressure:f32               ([0,1]; raw device value may be larger — normalize)
 ///   tiltX:f32 | tiltY:f32      (stylus tilt, degrees [-90,90])
 ///   scrollX:f32 | scrollY:f32
-///   keyCode:u16 | reserved:u16
+///   keyCode:u16 | pointerId:u16
 public struct InputEvent: Equatable {
     public var type: UInt8
     public var tool: UInt8
@@ -64,20 +64,20 @@ public struct InputEvent: Equatable {
     public var scrollX: Float
     public var scrollY: Float
     public var keyCode: UInt16
-    public var reserved: UInt16
+    public var pointerId: UInt16
 
     public init(type: UInt8, tool: UInt8 = InputTool.finger.rawValue, buttons: UInt8 = 0,
                 flags: UInt8 = 0, timestampMs: UInt64 = 0,
                 x: Float = 0, y: Float = 0, pressure: Float = 0,
                 tiltX: Float = 0, tiltY: Float = 0,
                 scrollX: Float = 0, scrollY: Float = 0,
-                keyCode: UInt16 = 0, reserved: UInt16 = 0) {
+                keyCode: UInt16 = 0, pointerId: UInt16 = 0) {
         self.type = type; self.tool = tool; self.buttons = buttons; self.flags = flags
         self.timestampMs = timestampMs
         self.x = x; self.y = y; self.pressure = pressure
         self.tiltX = tiltX; self.tiltY = tiltY
         self.scrollX = scrollX; self.scrollY = scrollY
-        self.keyCode = keyCode; self.reserved = reserved
+        self.keyCode = keyCode; self.pointerId = pointerId
     }
 }
 
@@ -91,7 +91,7 @@ public enum InputCodec {
         w.f32(e.x); w.f32(e.y); w.f32(e.pressure)
         w.f32(e.tiltX); w.f32(e.tiltY)
         w.f32(e.scrollX); w.f32(e.scrollY)
-        w.u16(e.keyCode); w.u16(e.reserved)
+        w.u16(e.keyCode); w.u16(e.pointerId)
         return w.data
     }
 
@@ -104,7 +104,7 @@ public enum InputCodec {
             x: r.f32(), y: r.f32(), pressure: r.f32(),
             tiltX: r.f32(), tiltY: r.f32(),
             scrollX: r.f32(), scrollY: r.f32(),
-            keyCode: r.u16(), reserved: r.u16())
+            keyCode: r.u16(), pointerId: r.u16())
     }
 }
 

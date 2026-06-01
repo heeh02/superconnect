@@ -76,7 +76,7 @@
 - **逐平台落地**：每平台各自实现 Host（屏幕采集 + 编码 + 输入注入）与 Receiver（解码 + 渲染 + 输入采集）引擎；线协议（`proto/`）跨平台复用、已用 golden vectors 锁定一致性。
 - **依赖的协议演进**（见 `ARCHITECTURE.md`）：
   - **Phase 2 ✅**：协议一致性测试台 —— `tools/check-protocol.sh` 跨 Swift / C++ / ArkTS 三端对照 `proto/vectors.json`（ArkTS 经 Node 无设备校验，含负向漂移检测）。
-  - **Phase 5**：向后兼容 v2 握手（`peerId` + host/receiver 角色协商 + 能力位 + 保留字段）。
+  - **Phase 5 ✅**：向后兼容 v2 握手 —— `hello`/`hello_ack` 附加 `peerId`/`platform`/`deviceName`/`supportedRoles`/`desiredRole`/`acceptedRole`（JSON 附加字段，v1 端忽略；缺省按 v1 默认：发起方=host、应答方=receiver）；INPUT 记录 `reserved:u16` → `pointerId:u16`（字节不变，向后兼容）。
   - **Phase 6**：多会话注册表（Layer A：每会话一连接、`peerId` 索引，零线协议改动即可多机并存）。
   - **Layer B（远期）**：`sessionId` 复用单连接。
   - Phase 7–9：Mac 作接收端、平板作主机端、1→N 协调器。

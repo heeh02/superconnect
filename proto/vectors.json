@@ -33,7 +33,7 @@
     }
   ],
   "inputRecordSize": 44,
-  "_inputComment": "INPUT event record (proto/protocol.md §5), 44 bytes LE: type:u8 tool:u8 buttons:u8 flags:u8 | timestampMs:u64 | x:f32 y:f32 pressure:f32 | tiltX:f32 tiltY:f32 | scrollX:f32 scrollY:f32 | keyCode:u16 reserved:u16. Asserted by mac InputCodecTests; ArkTS InputCodec.ets must match.",
+  "_inputComment": "INPUT event record (proto/protocol.md §5), 44 bytes LE: type:u8 tool:u8 buttons:u8 flags:u8 | timestampMs:u64 | x:f32 y:f32 pressure:f32 | tiltX:f32 tiltY:f32 | scrollX:f32 scrollY:f32 | keyCode:u16 pointerId:u16. Asserted by mac InputCodecTests; ArkTS InputCodec.ets must match.",
   "inputVectors": [
     {
       "name": "input-pen-move",
@@ -50,7 +50,7 @@
       "scrollX": 0.0,
       "scrollY": 0.0,
       "keyCode": 0,
-      "reserved": 0,
+      "pointerId": 0,
       "recordHex": "0101010000000000000000000000003f0000803e0000803f0000000000000000000000000000000000000000"
     }
   ]

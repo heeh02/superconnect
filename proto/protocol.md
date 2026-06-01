@@ -54,14 +54,19 @@ CONTROL 负载为 **UTF-8 编码的 JSON**，含 `type` 字段。Phase 0 必须�
 
 ```jsonc
 // Mac → Pad
-{ "type": "hello", "role": "mac", "protocolVersion": 1, "app": "superconnect",
+{ "type": "hello", "role": "mac", "protocolVersion": 2, "app": "superconnect",
+  "peerId": "<UUID>", "platform": "macos", "deviceName": "...",
+  "supportedRoles": ["host"], "desiredRole": "host",
   "caps": { "codecs": ["h264"], "maxWidth": 3840, "maxHeight": 2160, "hidpi": true } }
 
 // Pad → Mac
-{ "type": "hello_ack", "role": "pad", "protocolVersion": 1,
+{ "type": "hello_ack", "role": "pad", "protocolVersion": 2,
+  "peerId": "<UUID>", "platform": "harmonyos", "deviceName": "...",
+  "supportedRoles": ["receiver"], "acceptedRole": "receiver",
   "caps": { "codecs": ["h264", "hevc"], "screenWidth": 2560, "screenHeight": 1600,
             "scale": 2.0, "pen": true } }
 ```
+- **v2（向后兼容，附加）**：`protocolVersion` 升到 2，但 v2 端必须接受 v1 端——**缺省字段按 v1 默认**（发起方=host，应答方=receiver，即当前 Mac-host/Pad-receiver）。新增字段全部可选：`peerId`（每安装持久化的 UUID，信任/路由键，非传输地址）、`deviceName`、`platform`、`appVersion`、`desiredRole`/`supportedRoles`/`acceptedRole`（角色协商，为 v1 全平台互投预留）。JSON 附加字段，v1 端自动忽略。
 - 若 `protocolVersion` 不一致：回 `{ "type":"error", "code":"version_mismatch", "message":"..." }` 后关闭。
 
 ### 4.2 心跳 / 往返时延（RTT）
@@ -105,11 +110,12 @@ x:f32 | y:f32            // 归一化 [0,1]，相对虚拟屏
 pressure:f32            // [0,1]（设备原始值可能更大，注入端归一化）
 tiltX:f32 | tiltY:f32   // 手写笔倾角，度 [-90,90]
 scrollX:f32 | scrollY:f32
-keyCode:u16 | reserved:u16
+keyCode:u16 | pointerId:u16
 ```
 - `type`: 0=touchDown 1=touchMove 2=touchUp 3=hover 4=keyDown 5=keyUp 6=scroll
 - `tool`: 0=finger 1=pen 2=eraser 3=mouse
 - `buttons`: 位掩码（bit0=主键/左键，bit1=次键）
+- `pointerId`: 多点触控指针标识（v2 起；原 `reserved`，旧端写 `0`，字节布局不变、向后兼容）。
 - 坐标归一化；Mac 侧映射到虚拟屏全局像素坐标后注入。**笔(tool=pen)** 携带 `pressure`/`tiltX`/`tiltY`，Mac 用 `CGEvent` 的 tablet 子类型注入压感（专业 app 后续走 DriverKit 虚拟数字化板）。
 - Phase 3 后续可在 `flags` 标记"含历史采样点"，记录后追加高频采样数组（`GetHistory*`）。
 
