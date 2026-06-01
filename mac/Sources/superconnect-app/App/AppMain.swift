@@ -46,10 +46,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.target = self
         }
 
-        env.viewModel.$state
+        // Menu-bar glyph reflects whether ANY device is connected (#51 multi-session).
+        env.viewModel.$states
             .receive(on: RunLoop.main)
-            .sink { [weak self] state in
-                let name = state.isConnected ? "display.and.arrow.down" : "display"
+            .sink { [weak self] states in
+                let anyConnected = states.values.contains { $0.isConnected }
+                let name = anyConnected ? "display.and.arrow.down" : "display"
                 let img = NSImage(systemSymbolName: name, accessibilityDescription: "Superconnect")
                 img?.isTemplate = true
                 self?.statusItem.button?.image = img
@@ -69,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        env.coordinator.disconnect()
+        env.coordinator.disconnectAll()
         env.store.stop()
     }
 

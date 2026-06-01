@@ -15,6 +15,34 @@ public final class DisplayModeGuard {
 
     public init() {}
 
+    // MARK: - Process-shared, refcounted use (#51 multi-session)
+
+    /// One guard shared across ALL connections. With multiple simultaneous connections the snapshot
+    /// must be taken ONCE — before any virtual display exists — and only the real displays pinned;
+    /// a per-connection guard started after the first virtual display would wrongly snapshot+pin that
+    /// virtual display and fight another connection's rotation. retain()/release() refcount the shared
+    /// guard so it starts on the first connect and stops only when the last connection drops.
+    public static let shared = DisplayModeGuard()
+    private let refLock = NSLock()
+    private var refcount = 0
+
+    /// Begin (or join) guarding. Snapshots + registers the callback on the 0→1 transition only.
+    public func retain() {
+        refLock.lock(); defer { refLock.unlock() }
+        if refcount == 0 { start() }
+        refcount += 1
+    }
+
+    /// Leave guarding. Removes the callback + clears the snapshot on the N→0 transition only.
+    public func release() {
+        refLock.lock(); defer { refLock.unlock() }
+        guard refcount > 0 else { return }
+        refcount -= 1
+        if refcount == 0 { stop() }
+    }
+
+    // MARK: - Direct use (single-use callers / tests)
+
     /// Snapshot the current (pre-virtual-display) mode of every active display, then start guarding.
     public func start() {
         guard !active else { return }

@@ -2,7 +2,7 @@
 
 > 状态快照见 **[`PROJECT-STATUS.md`](PROJECT-STATUS.md)**；架构契约见 **[`ARCHITECTURE.md`](ARCHITECTURE.md)**。
 > 本文是**前瞻视图**：已完成的能力、明确的待办、以及每项待办的根因/设计建议。
-> 更新于 2026-05-31。
+> 更新于 2026-06-01。
 
 图例：✅ 已完成并真机验证 · 🔧 待办（含优先级 P1/P2/P3） · 🧭 方向（多设备长期目标）
 
@@ -16,10 +16,10 @@
 | 120Hz / HEVC / 能力协商 | 由平板 `hello_ack` 上报 caps，Mac 据此适配分辨率/刷新率/编解码，换机型无需改 Mac 代码 |
 | **物理键盘 + 虚拟键盘** | 快捷键/具名键 `onKeyPreIme` 预 IME 消费并以原始键回传；可打印 + 中文 IME 合成走 `onChange` 提交为 Unicode 文本。**两者均正常，本项收尾。** |
 | 手写笔压感（M-Pencil） | ArkUI `TouchEvent`(sourceTool=Pen) + `pressure/tilt` + `getHistoricalPoints`，Mac 侧 `CGEvent` tablet 子类型 + proximity 包裹。跨应用真压感，无需 DriverKit |
-| 触控板光标/单击/右键/滚动/捏合缩放/拖锁 | 见已知问题（仍有缺陷，列为 P2） |
+| 触控 / 触控板 | 手指触控与触控板的光标、单击、右键、滚动、捏合缩放、拖锁、双击等主路径已接通；包括标题栏 / 侧边栏这类 Mac UI 的全屏或填满窗口交互 |
 | Mac 端窗口式 GUI（MVVM） | 独立窗口设备仪表盘（侧栏设备 + 右侧详情/连接/权限）+ 菜单栏快捷入口；自动检测、有线/无线标识，预留对称多设备接口 |
 | 平板端代码仓库可维护性升级 | 单体 `Index.ets`(740→210) 拆分；与 Mac 镜像的分层（Models/Services/Connection/Role/Engine/Discovery + `AppEnvironment` 组合根 + 统一 `ConnectionStatus`）；输入/UI/协议分层 |
-| 统一应用图标 | 星座/GH 图标（仅存在于 DevEco 工程，仓库待补，见 §4） |
+| 统一应用图标 | 星座/GH 图标已进入 Mac app 与 HarmonyOS 工程资源 |
 
 ---
 
@@ -51,11 +51,8 @@
 - **通知栏退出**：用 `@ohos.notificationManager` 发布带操作按钮的常驻通知，按钮经 `WantAgent` 触发 `EntryAbility` 的退出全屏动作（回到小窗态）。进全屏时发布、退全屏时取消。
 - **状态机**：`windowed ⇄ fullscreen`，与现有 `ConnectionStatus` 正交；可放在平板 `models/` 下作为一个 `DisplayMode` 模型 + UI 层消费。
 
-### P2 — 触控板（trackpad）仍有问题
-当前移动/单击/右键/滚动/捏合/双击拖锁已接通，但实际使用仍有缺陷（手感/边界/丢事件）。**用户明确：列为 to-do，非当前重点。** 待复现并系统化修复（建议补 SCDIAG 轨迹再定位）。
-
-### P2 — 触控：部分功能未实现
-触控总体很好，但并非全部功能可用，例如**双击应用侧边栏让应用全屏**未实现。需要梳理触控可达的系统手势集合，补齐缺口（可能与 P1 的小窗/全屏状态机一并设计）。
+### P2 — 触控 / 触控板体验精调（观察项）
+当前手指触控与触控板主路径已完成，覆盖移动、单击、右键、滚动、捏合缩放、拖锁、双击，以及标题栏 / 侧边栏这类 Mac UI 的全屏或填满窗口交互；当前不再保留触控功能缺口 TODO。后续若真机日志暴露设备特定边界（手感、阈值、极端丢事件），再按 SCDIAG 轨迹做针对性调参。
 
 ### P3 — 收尾项
 - 悬浮球响应区为 56×56 方形（可改纯圆形），低优先级。
@@ -68,7 +65,7 @@
 ### v0 — 华为平板 ↔ Mac（当前版本）
 **目标**：任意华为平板作为 Mac 的有线副屏。Mac = 主机（造屏 / 采集 / 编码 / 投出），平板 = 从机（解码 / 显示 + 回传触控 / 笔 / 键盘）。
 - **设备适配（任意华为平板）**：平板握手时上报 caps（`screenWidth/Height`、`refreshRate`、`scale`、`codecs`、`pen`、`hdr`；`session/Session.ets`）；Mac 据此**动态**创建虚拟屏（`HostConnection.displayConfig` → `CGVirtualDisplay`，`VirtualDisplay.ets` 按 config 建模）——任意分辨率 / 刷新率自适应，长边按编码器上限裁剪、强制偶数像素。**换一台华为平板无需改代码。**
-- **约束 / to-do**：平板需 **HarmonyOS NEXT（API 12+）**（应用为 NEXT HAP，旧版 HarmonyOS 4.x 装不上）；当前**一次一路**连接（同时多机属 Layer A，见 v1）。**旋转 / 分辨率中途变化已支持自动重协商**（平板侧 `Session` 监听 `display.on('change')`、去抖去重后发 `caps_update` → Mac `HostConnection.reconfigure` 重建虚拟屏 + 解码器按新分辨率重启，#58）。
+- **约束 / to-do**：平板需 **HarmonyOS NEXT（API 12+）**（应用为 NEXT HAP，旧版 HarmonyOS 4.x 装不上）；**多机并存已支持**（Mac 同时作多台平板的副屏，连接层 `deviceID` 注册表，#51；线协议零改动）。**旋转 / 分辨率中途变化已支持自动重协商**（平板侧 `Session` 监听 `display.on('change')`、去抖去重后发 `caps_update` → Mac `HostConnection.reconfigure` 重建虚拟屏 + 解码器按新分辨率重启，#58）。
 
 ### v1 — 全平台互联（to-do，长期目标）🧭
 **目标**：**任意设备（Windows / macOS / iOS / HarmonyOS / Android）均可作为主机投出，或作为从机接收，运行时自由选择角色。**
@@ -77,7 +74,10 @@
 - **依赖的协议演进**（见 `ARCHITECTURE.md`）：
   - **Phase 2 ✅**：协议一致性测试台 —— `tools/check-protocol.sh` 跨 Swift / C++ / ArkTS 三端对照 `proto/vectors.json`（ArkTS 经 Node 无设备校验，含负向漂移检测）。
   - **Phase 5 ✅**：向后兼容 v2 握手 —— `hello`/`hello_ack` 附加 `peerId`/`platform`/`deviceName`/`supportedRoles`/`desiredRole`/`acceptedRole`（JSON 附加字段，v1 端忽略；缺省按 v1 默认：发起方=host、应答方=receiver）；INPUT 记录 `reserved:u16` → `pointerId:u16`（字节不变，向后兼容）。
-  - **Phase 6**：多会话注册表（Layer A：每会话一连接、`peerId` 索引，零线协议改动即可多机并存）。
+  - **Phase 6 ✅**：多会话注册表（Layer A）—— `ConnectionCoordinator` 改为 `[deviceID: 连接]` 注册表，
+    Mac 可同时作多台平板的副屏（#51）。每台设备独立连/断；三处进程级单例已多机安全化（每设备独立本地
+    `hdc fport` 端口、`CGVirtualDisplay` 序列号走进程级分配器、`DisplayModeGuard` 改为引用计数共享单例）。
+    **线协议零改动**（一致性测试台不变通过）。性能有限的 Mac 设软上限 2 路并提示，但不阻断。
   - **Layer B（远期）**：`sessionId` 复用单连接。
   - Phase 7–9：Mac 作接收端、平板作主机端、1→N 协调器。
 
@@ -86,6 +86,5 @@
 ## 4. 开源前置（仓库就绪性，🔧 P1）
 
 - **HarmonyOS 工程可构建性**：✅ 已完成（2026-05-31）。`harmony/` 现为**完整的 DevEco 工程**（脚手架 `build-profile.json5`/`hvigorfile.ts`/`oh-package.json5`/`hvigor/` + `media/` 星座图标 + `entrybackupability` 全部就位），可直接 `ohpm install` + 构建。**签名已清空**（`signingConfigs: []`，不含证书/密钥/口令），克隆者用 DevEco 自动签名。bundle 为 `com.superconnect.pad`。
-  - **建议**：把 DevEco 工程的脚手架与 `resources/.../media/`（含星座图标 `background/foreground/layered_image`）同步进仓库，排除 `oh_modules/`、`build/`、签名材料，使开源仓库可直接 `ohpm install` + 构建。
-- **许可证**：尚未选择（MIT / Apache-2.0 / …），开源前需补 `LICENSE`。
+- **许可证**：✅ 已补 MIT `LICENSE`。
 - **安全**：仓库已确认不含任何测试账号/签名私钥；`.gitignore` 已排除签名材料与构建产物。

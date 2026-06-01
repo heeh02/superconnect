@@ -8,68 +8,115 @@ typealias RoleFactory = (Role) -> ConnectionEngine
 /// Selects the tunnel for a transport (`.wired`→HdcFportTunnel, `.wireless`→DirectTunnel).
 typealias TunnelFactory = (TransportKind) -> TunnelService
 
-/// Owns the full connect/disconnect/retry/teardown lifecycle for the ONE chosen device.
-/// Role- and transport-agnostic: it only knows the `ConnectionEngine` / `TunnelService`
-/// protocols and the injected factories, so it's unit-testable with fakes (no real
-/// display / USB) and the symmetric future is a composition-root edit.
+/// Owns the connect/disconnect/teardown lifecycle for EVERY connected device — a `deviceID`-keyed
+/// registry, so multiple tablets can be live extended displays at once (#51 Layer A). Each entry is
+/// an independent `(engine, tunnel)` pair with its own state + telemetry; connecting or disconnecting
+/// one device never touches the others. Role- and transport-agnostic via the injected factories
+/// (unit-testable with fakes). The wire is unchanged — the protocol is already transport-per-session.
+///
+/// Registry key = `Device.id` (the hdc serial today: the discovery/teardown/dedup key). The
+/// v2-handshake `peerId` is the future cross-transport trust identity (`ARCHITECTURE.md` §5/§6) but
+/// is only known after the handshake, so it can't key the registry at connect time.
 final class ConnectionCoordinator: ObservableObject {
-    @Published private(set) var state: ConnectionState = .idle
-    @Published private(set) var telemetry: SessionTelemetry?
-    private(set) var connectedDeviceID: String?
+    /// Per-device connection state, keyed by `Device.id`. Absent ⇒ `.idle`.
+    @Published private(set) var states: [String: ConnectionState] = [:]
+    /// Per-device stream telemetry, keyed by `Device.id`.
+    @Published private(set) var telemetry: [String: SessionTelemetry] = [:]
 
     private let tunnelFor: TunnelFactory
     private let engineFor: RoleFactory
-    private var engine: ConnectionEngine?
-    private var tunnel: TunnelService?
-    private var bag = Set<AnyCancellable>()
+
+    /// One live link per device: the engine, its tunnel, and the subscriptions feeding `states`/`telemetry`.
+    private final class ManagedConnection {
+        let device: Device
+        let engine: ConnectionEngine
+        let tunnel: TunnelService
+        var bag = Set<AnyCancellable>()
+        init(device: Device, engine: ConnectionEngine, tunnel: TunnelService) {
+            self.device = device; self.engine = engine; self.tunnel = tunnel
+        }
+    }
+    private var conns: [String: ManagedConnection] = [:]
 
     init(tunnelFor: @escaping TunnelFactory, engineFor: @escaping RoleFactory) {
         self.tunnelFor = tunnelFor
         self.engineFor = engineFor
     }
 
+    // MARK: - Queries
+
+    /// Device ids with a live (connecting or connected) link.
+    var connectedDeviceIDs: [String] { Array(conns.keys) }
+    /// Number of live links — drives the advisory soft cap in the UI.
+    var activeCount: Int { conns.count }
+    func state(for id: String) -> ConnectionState { states[id] ?? .idle }
+
+    // MARK: - Lifecycle (per device)
+
+    /// Bring up a link for `device`. Idempotent (ignored if already live) and independent of every
+    /// other connection — no longer tears anything else down.
     func connect(_ device: Device, as role: Role = .host) {
-        disconnect()
+        guard conns[device.id] == nil else { return }
 
         if let err = SystemPermissions.preflight(for: role) {
-            state = .needsPermission(err)
+            states[device.id] = .needsPermission(err)
             return
         }
 
-        connectedDeviceID = device.id
-        state = .connecting
-
         let tunnel = tunnelFor(device.transport)
         let engine = engineFor(role)
-        self.tunnel = tunnel
-        self.engine = engine
+        let mc = ManagedConnection(device: device, engine: engine, tunnel: tunnel)
+        conns[device.id] = mc
+        states[device.id] = .connecting
 
         engine.statePublisher
             .receive(on: RunLoop.main)
-            .sink { [weak self] s in self?.state = s }
-            .store(in: &bag)
+            .sink { [weak self] s in self?.states[device.id] = s }
+            .store(in: &mc.bag)
         engine.telemetryPublisher?
             .receive(on: RunLoop.main)
-            .sink { [weak self] t in self?.telemetry = t }
-            .store(in: &bag)
+            .sink { [weak self] t in self?.telemetry[device.id] = t }
+            .store(in: &mc.bag)
 
         Task { [weak self] in
             do {
                 let dial = try await tunnel.open(for: device.endpoint)
-                engine.connect(host: dial.host, port: dial.port)
+                // The user may have disconnected this device while the tunnel was opening. Only start
+                // the engine if this exact connection is still the registered one — otherwise undo the
+                // just-opened tunnel so we don't leave a zombie pipeline the registry no longer tracks.
+                DispatchQueue.main.async {
+                    guard let self, self.conns[device.id] === mc else { tunnel.close(); return }
+                    engine.connect(host: dial.host, port: dial.port)
+                }
             } catch {
                 let appErr = (error as? AppError) ?? .tunnelFailed
-                DispatchQueue.main.async { self?.connectedDeviceID = nil; self?.state = .failed(appErr) }
+                DispatchQueue.main.async {
+                    // Drop the half-open entry (close the tunnel defensively) so the user can retry;
+                    // keep the `.failed` state visible on the device's card. engine.connect() never ran,
+                    // so we must NOT call engine.disconnect() (it would unbalance the shared guard).
+                    guard let self, self.conns[device.id] === mc else { return }
+                    mc.bag.removeAll(); mc.tunnel.close()
+                    self.conns[device.id] = nil
+                    self.states[device.id] = .failed(appErr)
+                    self.telemetry[device.id] = nil
+                }
             }
         }
     }
 
-    func disconnect() {
-        bag.removeAll()
-        engine?.disconnect(); engine = nil
-        tunnel?.close(); tunnel = nil
-        connectedDeviceID = nil
-        telemetry = nil
-        state = .idle
+    /// Tear down the link for one device. No-op if it isn't connected.
+    func disconnect(deviceID id: String) {
+        guard let mc = conns[id] else { return }
+        mc.bag.removeAll()
+        mc.engine.disconnect()
+        mc.tunnel.close()
+        conns[id] = nil
+        states[id] = nil
+        telemetry[id] = nil
+    }
+
+    /// Tear down every link (app teardown).
+    func disconnectAll() {
+        for id in Array(conns.keys) { disconnect(deviceID: id) }
     }
 }

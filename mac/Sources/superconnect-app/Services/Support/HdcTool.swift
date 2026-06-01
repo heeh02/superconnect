@@ -48,17 +48,19 @@ enum HdcTool {
             .filter { !$0.isEmpty && !$0.hasPrefix("[") && $0 != "Empty" }
     }
 
-    /// Forward `tcp:port` on this Mac to `tcp:port` on the given device.
+    /// Forward `tcp:<local>` on this Mac to `tcp:<remote>` on the given device. The LOCAL port must be
+    /// unique per device (so several tablets don't collide on one Mac, #51); the REMOTE port is the
+    /// tablet's fixed listen port inside its own process (same value on every tablet is fine).
     @discardableResult
-    static func fport(serial: String, port: UInt16) -> Bool {
+    static func fport(serial: String, local: UInt16, remote: UInt16) -> Bool {
         guard let hdc = path() else { return false }
-        let out = run(hdc, ["-t", serial, "fport", "tcp:\(port)", "tcp:\(port)"])
+        let out = run(hdc, ["-t", serial, "fport", "tcp:\(local)", "tcp:\(remote)"])
         return out.localizedCaseInsensitiveContains("OK") || out.isEmpty
     }
 
-    static func killFport(serial: String, port: UInt16) {
+    static func killFport(serial: String, local: UInt16, remote: UInt16) {
         guard let hdc = path() else { return }
-        _ = run(hdc, ["-t", serial, "fport", "rm", "tcp:\(port)", "tcp:\(port)"])
+        _ = run(hdc, ["-t", serial, "fport", "rm", "tcp:\(local)", "tcp:\(remote)"])
     }
 
     // MARK: - Process helper

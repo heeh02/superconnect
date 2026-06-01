@@ -62,9 +62,11 @@ The symmetric end-state ("any device can host or receive; multiple receivers") i
 Note the **mirror symmetry**: each platform has exactly one real role engine and one stub, on
 *opposite* sides. Selecting the engine is a **one-line edit in the composition root** (`engineFor(role)`).
 
-**Multiple receivers** = the connection lifecycle owner (`ConnectionCoordinator` / `ConnectionManager`)
-holding a `Peer → Engine` map instead of a single link. Pure orchestration; the engine/tunnel/
-discovery contracts don't change (Phase 9).
+**Multiple connections** = the connection lifecycle owner (`ConnectionCoordinator` / `ConnectionManager`)
+holding a `deviceID → Engine` map instead of a single link. Pure orchestration; the engine/tunnel/
+discovery contracts don't change. **Built for hosting (#51 / Layer A)** — the Mac drives N tablets at
+once; the symmetric *receiver* side (Mac being cast to by several hosts) is the same map once a real
+`SuperconnectConsumer` exists (Phase 9).
 
 ---
 
@@ -82,11 +84,18 @@ discovery contracts don't change (Phase 9).
 
 ## 5. Multi-device transport strategy
 
-- **Layer A — connection-per-session (the chosen path):** multiple independent TCP/`hdc fport`
-  connections, one `Session` each, keyed by `peerId` in an app-layer registry. The wire needs
-  **nothing new** — the protocol is already transport-per-session. This is where multi-device
-  actually arrives, with zero wire risk (suits a performance-limited host: fan out at the
-  connection layer, not the wire).
+- **Layer A — connection-per-session (the chosen path, ✅ built #51):** multiple independent
+  TCP/`hdc fport` connections, one `Session` each, keyed by `Device.id` in an app-layer registry
+  (`ConnectionCoordinator` holds `[deviceID: ManagedConnection]`; each owns its own `HostConnection`
+  → `CGVirtualDisplay` + capture + encode + injector). The wire needs **nothing new** — the protocol
+  is already transport-per-session (the conformance suite passes unchanged). Three shared-globals were
+  made multi-safe: each device gets its **own local `hdc fport`** port (the tablet's listen port is the
+  *remote*), `CGVirtualDisplay` serials come from a **process-global allocator** (`DisplaySerial`) so
+  N displays never share an identity, and one **refcounted `DisplayModeGuard.shared`** snapshots the
+  real displays once before any virtual display. Connecting/disconnecting one device is independent of
+  the others; an advisory soft cap (2) warns about perf on a limited host but never blocks. The key is
+  `Device.id` (hdc serial) today; the v2 `peerId` is the future cross-transport identity (§6).
+  This is where multi-device actually arrives, with zero wire risk.
 - **Layer B — multiplexed logical sessions on one byte stream (reserved, not built):** would add
   `sessionId:u16` to an 8-byte frame header + `session_start`/`session_end` control messages,
   **feature-gated** by a `muxSessions` capability so two peers only switch to the 8-byte header

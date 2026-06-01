@@ -7,16 +7,17 @@ struct DeviceDetailView: View {
     @ObservedObject var vm: AppViewModel
     let device: Device
 
-    private var deviceState: ConnectionState { device.id == vm.connectedDeviceID ? vm.state : .idle }
-    private var isThisConnected: Bool { vm.connectedDeviceID == device.id && vm.isConnected }
+    private var deviceState: ConnectionState { vm.state(for: device.id) }
+    private var isThisConnected: Bool { vm.isConnected(device.id) }
+    private var deviceTelemetry: SessionTelemetry? { vm.telemetry(for: device.id) }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
-                ConnectionToggle(vm: vm)
+                ConnectionToggle(vm: vm, device: device)
 
-                if isThisConnected, let t = vm.telemetry {
+                if isThisConnected, let t = deviceTelemetry {
                     GroupBox("画面") { AdvancedPanel(telemetry: t).padding(6) }
                 }
 
@@ -38,7 +39,7 @@ struct DeviceDetailView: View {
                 GroupBox("连接信息") {
                     VStack(alignment: .leading, spacing: 6) {
                         infoRow("传输", device.transport == .wired ? "有线 (USB)" : "无线")
-                        infoRow("画面", vm.telemetry.map { "\($0.resolution) · \($0.codec.uppercased())" } ?? "连接后显示")
+                        infoRow("画面", deviceTelemetry.map { "\($0.resolution) · \($0.codec.uppercased())" } ?? "连接后显示")
                         Text("分辨率 / 刷新率 / 编码 / 码率由 Mac 与平板自动协商。")
                             .font(.caption).foregroundStyle(.tertiary)
                     }

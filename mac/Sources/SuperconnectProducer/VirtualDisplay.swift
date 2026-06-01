@@ -2,6 +2,22 @@ import Foundation
 import CoreGraphics
 import CGVirtualDisplayPrivate
 
+/// Process-global allocator for unique CGVirtualDisplay serial numbers. Every virtual display must
+/// have a UNIQUE identity (vendor/product/serial) or macOS treats two displays as the same one and
+/// restores a remembered MIRROR arrangement (#58). With multiple simultaneous connections (#51 Layer A)
+/// the old per-connection counter (each starting at 1) collided ACROSS connections — this hands out a
+/// value that is unique across the whole process, so N live virtual displays never share an identity.
+public enum DisplaySerial {
+    private static let lock = NSLock()
+    private static var next: UInt32 = 1
+    public static func allocate() -> UInt32 {
+        lock.lock(); defer { lock.unlock() }
+        let v = next
+        next &+= 1
+        return v
+    }
+}
+
 /// Configuration for a Superconnect virtual display.
 public struct VirtualDisplayConfig {
     public var name: String

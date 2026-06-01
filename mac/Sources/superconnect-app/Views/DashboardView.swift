@@ -27,7 +27,7 @@ struct DashboardView: View {
                 Image(systemName: "display").foregroundStyle(.tint)
                 Text("设备").font(.headline)
                 Spacer()
-                StatusDot(state: vm.state)
+                StatusDot(state: aggregateState)
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
             Divider()
@@ -39,12 +39,18 @@ struct DashboardView: View {
                     get: { vm.selectedDeviceID },
                     set: { if let id = $0 { vm.select(id) } }   // routes through the mid-connection guard
                 )) { device in
-                    SidebarRow(device: device,
-                               state: device.id == vm.connectedDeviceID ? vm.state : .idle)
+                    SidebarRow(device: device, state: vm.state(for: device.id))
                 }
                 .listStyle(.sidebar)
             }
         }
+    }
+
+    /// Sidebar header dot: connected if ANY device is connected, busy if any is connecting.
+    private var aggregateState: ConnectionState {
+        if vm.devices.contains(where: { vm.isConnected($0.id) }) { return .connected }
+        if vm.devices.contains(where: { vm.isBusy($0.id) }) { return .connecting }
+        return .idle
     }
 
     private var placeholder: some View {

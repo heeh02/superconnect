@@ -26,7 +26,8 @@ final class HostConnection: ConnectionEngine {
     private var virtualDisplay: VirtualDisplay?
     private var producer: Producer?
     private var injector: InputInjector?
-    private let displayGuard = DisplayModeGuard()   // keep the Mac's own displays at the user's resolution (#58)
+    // Shared, refcounted guard: with multiple simultaneous connections (#51) every HostConnection
+    // shares ONE guard so the real-display snapshot is taken once, before any virtual display (#58).
 
     private var fpsTimer: DispatchSourceTimer?
     private let frameLock = NSLock()
@@ -35,7 +36,7 @@ final class HostConnection: ConnectionEngine {
 
     private var running = false
     private var generation = 0
-    private var displaySerial: UInt32 = 0   // unique CGVirtualDisplay identity per build (#58 anti-mirror)
+    private var guardRetained = false   // did THIS connection retain the shared DisplayModeGuard? (balance release, #51)
     private var tele = SessionTelemetry()
 
     // MARK: - ConnectionEngine
@@ -47,7 +48,7 @@ final class HostConnection: ConnectionEngine {
         generation += 1
         tele = SessionTelemetry(); tele.bitrateMbps = bitrateMbps
         stateSubject.send(.connecting)
-        displayGuard.start()   // snapshot + pin the user's real-display resolution before adding the virtual one
+        DisplayModeGuard.shared.retain(); guardRetained = true   // snapshot + pin the user's real-display resolution before adding the virtual one
         startFpsTimer()
         openSession(generation: generation)
     }
@@ -56,7 +57,9 @@ final class HostConnection: ConnectionEngine {
         running = false
         generation += 1
         fpsTimer?.cancel(); fpsTimer = nil
-        displayGuard.stop()   // macOS restores the user's resolution once the virtual display is gone
+        // Only release if we actually retained — disconnect() may be called on an engine whose
+        // connect() never ran (torn down mid tunnel-open), and the guard's refcount is shared (#51).
+        if guardRetained { DisplayModeGuard.shared.release(); guardRetained = false }   // macOS restores the user's resolution once the last virtual display is gone
         // Heavy teardown (producer.stop awaits VTCompressionSession invalidate) off the
         // main thread so the UI never hangs; generation bump already neutered callbacks.
         let prod = producer; producer = nil
@@ -130,12 +133,11 @@ final class HostConnection: ConnectionEngine {
         guard running, gen == generation else { return }
         var cfg = displayConfig(from: caps)
         cfg.hdr = hdrEnabled(from: caps)   // HDR reference display → macOS keeps EDR headroom
-        displaySerial &+= 1
-        cfg.serial = displaySerial         // fresh identity each build ⇒ always extends, never restores a mirror (#58)
+        cfg.serial = DisplaySerial.allocate()   // process-globally unique identity ⇒ always extends, never restores a mirror, never collides across simultaneous connections (#51/#58)
         let vd = VirtualDisplay(cfg)
         self.virtualDisplay = vd
         self.injector = InputInjector(displayID: vd.displayID)
-        diag("buildPipeline \(cfg.pointWidth)x\(cfg.pointHeight) serial=\(displaySerial) id=\(vd.displayID)")
+        diag("buildPipeline \(cfg.pointWidth)x\(cfg.pointHeight) serial=\(cfg.serial) id=\(vd.displayID)")
         buildProducer(vd: vd, caps: caps, gen: gen)
     }
 
