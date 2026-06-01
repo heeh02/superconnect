@@ -15,6 +15,8 @@ export class ReceiverConnection implements ConnectionEngine {
   private bindAddressFn: () => string;
   // Wireless TOFU gate (null ⇒ no gate). Passed to each transport so LAN clients need approval.
   private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null;
+  // Fired when the socket starts listening — WirelessService advertises over mDNS when on LAN.
+  private onListeningFn: ((address: string, port: number) => void) | null;
   private transport: TcpServerTransport | null = null;
   onStatus?: (s: ConnectionStatus) => void;
   onStreamInfo?: (info: StreamInfo) => void;
@@ -22,10 +24,12 @@ export class ReceiverConnection implements ConnectionEngine {
 
   constructor(port: number,
               bindAddressFn: () => string = (): string => '127.0.0.1',
-              pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null = null) {
+              pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null = null,
+              onListeningFn: ((address: string, port: number) => void) | null = null) {
     this.port = port;
     this.bindAddressFn = bindAddressFn;
     this.pairingGate = pairingGate;
+    this.onListeningFn = onListeningFn;
   }
 
   start(): void {
@@ -47,6 +51,7 @@ export class ReceiverConnection implements ConnectionEngine {
       },
       this.pairingGate,
     );
+    this.transport.onListening = this.onListeningFn;
     this.transport.start(this.port, this.bindAddressFn());
   }
 

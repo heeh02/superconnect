@@ -21,6 +21,9 @@ export class TcpServerTransport {
   private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null;
   private currentSend: ((bytes: Uint8Array) => void) | null = null;
   private currentClientId: number = -1;
+  // Fired once the socket is listening (after listen succeeds). WirelessService uses this to
+  // advertise over mDNS only when bound to the LAN (0.0.0.0). Null on the wired path.
+  onListening: ((address: string, port: number) => void) | null = null;
 
   constructor(log: (s: string) => void,
               onStatus: (s: string) => void,
@@ -51,6 +54,7 @@ export class TcpServerTransport {
     this.server.listen(addr).then(() => {
       this.onStatus('listening ' + bindAddress + ':' + port);
       this.log('TCP server listening on ' + bindAddress + ':' + port);
+      if (this.onListening !== null) { this.onListening(bindAddress, port); }
     }).catch((err: Object) => {
       this.onStatus('listen failed');
       this.log('listen error: ' + JSON.stringify(err));

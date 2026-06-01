@@ -16,12 +16,14 @@ export class AppEnvironment {
 
   constructor(port: number, ctx: common.UIAbilityContext) {
     this.wireless = new WirelessService(ctx);
-    // The receiver binds where WirelessService says, and consults its TOFU gate for LAN clients.
+    // The receiver binds where WirelessService says, consults its TOFU gate for LAN clients, and
+    // reports listen-success so WirelessService can advertise over mDNS when on the LAN.
     const receiver: ReceiverConnection = new ReceiverConnection(
       port,
       (): string => this.wireless.bindAddress(),
       (peerId: string, deviceName: string, isLocalhost: boolean): Promise<boolean> =>
         this.wireless.evaluatePairing(peerId, deviceName, isLocalhost),
+      (address: string, listenPort: number): void => this.wireless.onListening(address, listenPort),
     );
     const engineForRole = (role: Role): ConnectionEngine => {
       return role === Role.Host ? new HostConnection() : receiver;

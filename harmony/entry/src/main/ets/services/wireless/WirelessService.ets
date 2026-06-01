@@ -16,10 +16,12 @@ import wifiManager from '@ohos.wifiManager';
 import hilog from '@ohos.hilog';
 import { common } from '@kit.AbilityKit';
 import { PairingStore, TrustedPeer } from './PairingStore';
+import { MdnsAdvertiser } from './MdnsAdvertiser';
 
 const STORE: string = 'sc_wireless';
 const KEY_ENABLED: string = 'enabled';
 const PAIR_TIMEOUT_MS: number = 60000;   // auto-reject an unanswered pairing prompt after 60s
+const SERVICE_NAME: string = 'Superconnect Pad';   // mDNS service name (shown as the device on the Mac)
 
 export class WirelessService {
   private prefs: preferences.Preferences | null = null;
@@ -30,6 +32,8 @@ export class WirelessService {
 
   // ── TOFU pairing ──
   private pairing: PairingStore;
+  // mDNS advertiser — publishes _superconnect._tcp once the socket is listening on the LAN.
+  private advertiser: MdnsAdvertiser;
   // Peers the user explicitly rejected THIS app run — silently refused (no re-prompt) until restart
   // or until wireless is re-enabled.
   private sessionDenied: string[] = [];
@@ -44,6 +48,7 @@ export class WirelessService {
 
   constructor(ctx: common.UIAbilityContext) {
     this.pairing = new PairingStore(ctx);
+    this.advertiser = new MdnsAdvertiser(ctx);
     try {
       this.prefs = preferences.getPreferencesSync(ctx, { name: STORE });
       this.enabledFlag = this.prefs.getSync(KEY_ENABLED, false) as boolean;
@@ -59,6 +64,18 @@ export class WirelessService {
 
   /** Where the receiver listens: 0.0.0.0 (LAN + localhost) when ON, else 127.0.0.1 (USB only). */
   bindAddress(): string { return this.enabledFlag ? '0.0.0.0' : '127.0.0.1'; }
+
+  /**
+   * Called by the receiver once the socket is listening. Advertise over mDNS only when bound to the
+   * LAN (0.0.0.0); on 127.0.0.1 (wireless off / USB only) ensure no advertisement is live.
+   */
+  onListening(address: string, port: number): void {
+    if (this.enabledFlag && address !== '127.0.0.1') {
+      this.advertiser.advertise(SERVICE_NAME, port);
+    } else {
+      this.advertiser.unadvertise();
+    }
+  }
 
   setEnabled(v: boolean): void {
     if (v === this.enabledFlag) { return; }

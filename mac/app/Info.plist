@@ -24,5 +24,11 @@
     <string>14.0</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>Superconnect captures your Mac screen to stream it to the tablet.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Superconnect 通过本地网络发现并连接同一 Wi‑Fi 下的平板（无线投屏）。</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_superconnect._tcp</string>
+    </array>
 </dict>
 </plist>
