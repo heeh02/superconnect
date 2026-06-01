@@ -46,7 +46,7 @@ enum HdcTool {
     /// or nothing connected. "[Empty]" sentinel is filtered out.
     static func listTargets() -> [String] {
         guard let hdc = path() else { return [] }
-        let out = run(hdc, ["list", "targets"])
+        let out = run(hdc, ["list", "targets"]).output
         return out
             .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -59,8 +59,13 @@ enum HdcTool {
     @discardableResult
     static func fport(serial: String, local: UInt16, remote: UInt16) -> Bool {
         guard let hdc = path() else { return false }
-        let out = run(hdc, ["-t", serial, "fport", "tcp:\(local)", "tcp:\(remote)"])
-        return out.localizedCaseInsensitiveContains("OK") || out.isEmpty
+        let r = run(hdc, ["-t", serial, "fport", "tcp:\(local)", "tcp:\(remote)"])
+        // Trust the exit code, and reject explicit failure text — do NOT treat empty stdout as
+        // success (on Intel's system hdc a silent failure would otherwise look like a live tunnel,
+        // sending us into a connect-retry loop instead of a clear error). (review P3)
+        guard r.exit == 0 else { return false }
+        let o = r.output.lowercased()
+        return !(o.contains("fail") || o.contains("error") || o.contains("cannot") || o.contains("unable"))
     }
 
     static func killFport(serial: String, local: UInt16, remote: UInt16) {
@@ -70,16 +75,21 @@ enum HdcTool {
 
     // MARK: - Process helper
 
-    private static func run(_ launchPath: String, _ args: [String]) -> String {
+    /// Run a CLI and return its combined stdout+stderr and exit status. (Output is small for hdc, so
+    /// reading the pipes after the process closes them won't deadlock.)
+    @discardableResult
+    private static func run(_ launchPath: String, _ args: [String]) -> (output: String, exit: Int32) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: launchPath)
         p.arguments = args
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = Pipe()
-        do { try p.run() } catch { return "" }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let outPipe = Pipe(); let errPipe = Pipe()
+        p.standardOutput = outPipe
+        p.standardError = errPipe
+        do { try p.run() } catch { return ("", -1) }
+        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
-        return String(data: data, encoding: .utf8) ?? ""
+        let out = (String(data: outData, encoding: .utf8) ?? "") + (String(data: errData, encoding: .utf8) ?? "")
+        return (out, p.terminationStatus)
     }
 }

@@ -81,7 +81,7 @@ final class HostConnection: ConnectionEngine {
             // Only release if we actually retained — disconnect() may run on an engine whose connect()
             // never started, and the guard's refcount is shared (#51).
             if self.guardRetained { DisplayModeGuard.shared.release(); self.guardRetained = false }
-            let prod = self.producer; self.producer = nil
+            self.frameLock.lock(); let prod = self.producer; self.producer = nil; self.frameLock.unlock()
             let t = self.transport; self.transport = nil
             self.session = nil; self.virtualDisplay = nil; self.setInjector(nil)
             // Heavy teardown (producer.stop awaits VTCompressionSession invalidate) OFF the serial
@@ -124,8 +124,10 @@ final class HostConnection: ConnectionEngine {
 
         // Transport/Session callbacks fire on the network thread → hop onto lifeQ before touching
         // lifecycle state (so they serialize with connect/retry/teardown).
-        session.onConnected = { [weak self] in
-            guard let self else { return }
+        // weak session: Session holds onConnected, and onConnected referencing `session` would form a
+        // Session→closure→Session cycle that leaks the Session/Transport/NWConnection on every retry. (review P2)
+        session.onConnected = { [weak self, weak session] in
+            guard let self, let session else { return }
             self.lifeQ.async {
                 guard self.running, gen == self.generation else { return }
                 self.buildPipeline(caps: session.peerCaps, gen: gen)
@@ -162,7 +164,7 @@ final class HostConnection: ConnectionEngine {
     /// MUST run on lifeQ. Nils the refs synchronously; stops the producer/transport off-queue so the
     /// serial lifecycle never blocks on the 2s VTCompressionSession invalidate.
     private func teardownSession() {
-        let prod = producer; producer = nil
+        frameLock.lock(); let prod = producer; producer = nil; frameLock.unlock()
         let t = transport; transport = nil
         session = nil; virtualDisplay = nil; setInjector(nil)
         DispatchQueue.global().async {
@@ -206,16 +208,23 @@ final class HostConnection: ConnectionEngine {
 
         let prod = Producer(virtualDisplay: vd, fps: negFps,
                             bitrate: self.bitrateMbps * 1_000_000, codec: negCodec, hdr: negHdr)
-        prod.onResolution = { w, h in
-            session.sendVideoConfig(width: w, height: h, codec: negCodec.rawValue, hdr: negHdr ? "pq" : "off")
+        prod.onResolution = { [weak session] w, h in
+            session?.sendVideoConfig(width: w, height: h, codec: negCodec.rawValue, hdr: negHdr ? "pq" : "off")
         }
-        prod.onEncoded = { [weak self] data, isKeyframe in
+        prod.onEncoded = { [weak self, weak prod] data, isKeyframe in
+            guard let self, let prod else { return }
+            // Drop frames from a STALE producer. teardown/reconfigure stop the old producer
+            // ASYNCHRONOUSLY, so its last in-flight frames must NOT be sent on the (old) transport
+            // nor flip the UI back to .connected after a disconnect/retry. (review P1)
+            self.frameLock.lock()
+            let isCurrent = (self.producer === prod)
+            if isCurrent { self.frames += 1; self.bytes += data.count }
+            self.frameLock.unlock()
+            guard isCurrent else { return }
             transport.send(FrameCodec.encode(channel: .video, flags: isKeyframe ? .keyframe : [], payload: data))
-            guard let self else { return }
-            self.frameLock.lock(); self.frames += 1; self.bytes += data.count; self.frameLock.unlock()
             if self.stateSubject.value != .connected { self.stateSubject.send(.connected) }
         }
-        self.producer = prod
+        frameLock.lock(); self.producer = prod; frameLock.unlock()   // under lock so onEncoded's ===prod check is race-free
         Task { try? await prod.start() }
     }
 
@@ -230,7 +239,7 @@ final class HostConnection: ConnectionEngine {
         diag("reconfigure new=\(newCfg.pointWidth)x\(newCfg.pointHeight) cur=\(mi.pointW)x\(mi.pointH)")
         if mi.pointW == newCfg.pointWidth && mi.pointH == newCfg.pointHeight { diag("reconfigure no-change"); return }
         stateSubject.send(.connecting)
-        let prod = producer; producer = nil
+        frameLock.lock(); let prod = producer; producer = nil; frameLock.unlock()
         let oldVD = virtualDisplay; virtualDisplay = nil; setInjector(nil)
         // Heavy stop + CG settle OFF the serial queue, in order (stop capture → hold old display →
         // settle), THEN hop back onto lifeQ to rebuild — so the rebuild never races other lifecycle
