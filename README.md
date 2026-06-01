@@ -110,6 +110,14 @@ cd ../shared/cpp/tests && make test  # C++ 实现与 Swift 逐字节一致
 
 ---
 
+## 支持作者 ☕
+
+软件开发不易，感谢你的支持！如果这个项目帮到了你，欢迎用支付宝请作者喝杯咖啡 ❤️
+
+<img src="docs/assets/donate-alipay.jpg" alt="支付宝赞赏码" width="260">
+
+---
+
 ## 许可证
 
 [MIT](LICENSE)。
