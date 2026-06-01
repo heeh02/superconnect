@@ -40,32 +40,131 @@ final class HostConnection: ConnectionEngine {
     private var guardRetained = false   // did THIS connection retain the shared DisplayModeGuard? (balance release, #51)
     private var tele = SessionTelemetry()
 
+    /// Serializes the ENTIRE session lifecycle (connect / openSession / retry / teardown / build /
+    /// reconfigure). Before this, a connection that kept failing fired onError AND onClosed → two
+    /// retries (neither bumping the generation), and those ran on arbitrary threads → a storm of
+    /// concurrent openSession() racing on transport/session → crash (SIGSEGV in Session.start).
+    private let lifeQ = DispatchQueue(label: "superconnect.host.life")
+
+    /// `injector` is written on lifeQ (buildPipeline / teardown) but read on the transport's callback
+    /// thread (onInput/onText), so guard it — an unlocked read while it's being replaced races the
+    /// ARC refcount. Reuses frameLock (always tiny critical sections, no nesting).
+    private func currentInjector() -> InputInjector? { frameLock.lock(); defer { frameLock.unlock() }; return injector }
+    private func setInjector(_ inj: InputInjector?) { frameLock.lock(); injector = inj; frameLock.unlock() }
+
     // MARK: - ConnectionEngine
 
     func connect(host: String, port: UInt16) {
-        self.host = host
-        self.port = port
-        running = true
-        generation += 1
-        tele = SessionTelemetry(); tele.bitrateMbps = bitrateMbps
-        stateSubject.send(.connecting)
-        DisplayModeGuard.shared.retain(); guardRetained = true   // snapshot + pin the user's real-display resolution before adding the virtual one
-        startFpsTimer()
-        openSession(generation: generation)
+        lifeQ.async {
+            self.host = host
+            self.port = port
+            self.running = true
+            self.generation += 1
+            let gen = self.generation
+            self.tele = SessionTelemetry(); self.tele.bitrateMbps = self.bitrateMbps
+            self.stateSubject.send(.connecting)
+            if !self.guardRetained { DisplayModeGuard.shared.retain(); self.guardRetained = true }   // pin real-display resolution before adding the virtual one
+            self.startFpsTimer()
+            self.openSession(generation: gen)
+        }
     }
 
     func disconnect() {
-        running = false
-        generation += 1
-        fpsTimer?.cancel(); fpsTimer = nil
-        // Only release if we actually retained — disconnect() may be called on an engine whose
-        // connect() never ran (torn down mid tunnel-open), and the guard's refcount is shared (#51).
-        if guardRetained { DisplayModeGuard.shared.release(); guardRetained = false }   // macOS restores the user's resolution once the last virtual display is gone
-        // Heavy teardown (producer.stop awaits VTCompressionSession invalidate) off the
-        // main thread so the UI never hangs; generation bump already neutered callbacks.
+        // sync (not async): runs serialized with the lifecycle AND completes before returning, so the
+        // app-quit path (applicationWillTerminate → disconnectAll) tears the session down before the
+        // process exits — as the original synchronous disconnect did. Safe: no lifeQ block waits on
+        // main, and disconnect is only called from main.
+        lifeQ.sync {
+            self.running = false
+            self.generation += 1   // neuter all in-flight callbacks / scheduled retries
+            self.fpsTimer?.cancel(); self.fpsTimer = nil
+            // Only release if we actually retained — disconnect() may run on an engine whose connect()
+            // never started, and the guard's refcount is shared (#51).
+            if self.guardRetained { DisplayModeGuard.shared.release(); self.guardRetained = false }
+            let prod = self.producer; self.producer = nil
+            let t = self.transport; self.transport = nil
+            self.session = nil; self.virtualDisplay = nil; self.setInjector(nil)
+            // Heavy teardown (producer.stop awaits VTCompressionSession invalidate) OFF the serial
+            // queue so it never blocks a subsequent connect; generation bump already neutered callbacks.
+            DispatchQueue.global().async {
+                if let prod {
+                    let sem = DispatchSemaphore(value: 0)
+                    Task { await prod.stop(); sem.signal() }
+                    _ = sem.wait(timeout: .now() + 2)
+                }
+                t?.stop()
+            }
+            self.stateSubject.send(.idle)
+        }
+    }
+
+    /// Live bitrate change (clamped 10–100 Mbps). Retunes the running encoder immediately AND is read
+    /// by the next buildProducer, so a reconnect/rotation re-applies it. Satisfies `ConnectionEngine`.
+    func setBitrate(_ mbps: Int) {
+        let m = max(10, min(100, mbps))
+        lifeQ.async {
+            self.bitrateMbps = m
+            self.tele.bitrateMbps = m
+            self.telemetrySubject.send(self.tele)
+            self.producer?.setBitrate(m * 1_000_000)
+            self.diag("setBitrate \(m)Mbps applied (producer=\(self.producer != nil))")
+        }
+    }
+
+    // MARK: - Session lifecycle — ALL on lifeQ (serial). Exactly one session is ever live; retry
+    // bumps the generation so a failure's onError+onClosed (and any stale callback) collapse into one.
+
+    /// MUST run on lifeQ.
+    private func openSession(generation gen: Int) {
+        guard running, gen == generation else { return }
+        let transport = TcpTransport(host: host, port: port)
+        let session = Session(transport: transport, role: "mac")
+        self.transport = transport
+        self.session = session
+
+        // Transport/Session callbacks fire on the network thread → hop onto lifeQ before touching
+        // lifecycle state (so they serialize with connect/retry/teardown).
+        session.onConnected = { [weak self] in
+            guard let self else { return }
+            self.lifeQ.async {
+                guard self.running, gen == self.generation else { return }
+                self.buildPipeline(caps: session.peerCaps, gen: gen)
+            }
+        }
+        session.onCapsUpdate = { [weak self] caps in
+            guard let self else { return }
+            self.lifeQ.async {
+                self.diag("onCapsUpdate fired: \(caps["screenWidth"] ?? "?")x\(caps["screenHeight"] ?? "?")")
+                self.reconfigure(caps: caps, gen: gen)
+            }
+        }
+        session.onInput = { [weak self] data in
+            if let e = InputCodec.decode(data) { self?.currentInjector()?.inject(e) }   // injector read is locked
+        }
+        session.onText = { [weak self] t in self?.currentInjector()?.injectText(t) }
+        session.onError = { [weak self] _ in self?.lifeQ.async { self?.retry(gen: gen) } }
+        session.onClosed = { [weak self] in self?.lifeQ.async { self?.retry(gen: gen) } }
+        session.start()
+    }
+
+    /// MUST run on lifeQ. Bumps the generation (dedup) and schedules the next openSession on lifeQ.
+    private func retry(gen: Int) {
+        guard running, gen == generation else { return }
+        generation += 1                       // stale callbacks for `gen` now guard out → one retry only
+        let next = generation
+        teardownSession()
+        stateSubject.send(.connecting)
+        lifeQ.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.openSession(generation: next)
+        }
+    }
+
+    /// MUST run on lifeQ. Nils the refs synchronously; stops the producer/transport off-queue so the
+    /// serial lifecycle never blocks on the 2s VTCompressionSession invalidate.
+    private func teardownSession() {
         let prod = producer; producer = nil
         let t = transport; transport = nil
-        session = nil; virtualDisplay = nil; injector = nil
+        session = nil; virtualDisplay = nil; setInjector(nil)
         DispatchQueue.global().async {
             if let prod {
                 let sem = DispatchSemaphore(value: 0)
@@ -74,67 +173,6 @@ final class HostConnection: ConnectionEngine {
             }
             t?.stop()
         }
-        stateSubject.send(.idle)
-    }
-
-    /// Live bitrate change (clamped 10–100 Mbps). Retunes the running encoder immediately AND is read
-    /// by the next buildProducer, so a reconnect/rotation re-applies it. Satisfies `ConnectionEngine`.
-    func setBitrate(_ mbps: Int) {
-        let m = max(10, min(100, mbps))
-        bitrateMbps = m
-        tele.bitrateMbps = m
-        telemetrySubject.send(tele)
-        producer?.setBitrate(m * 1_000_000)
-        diag("setBitrate \(m)Mbps applied (producer=\(producer != nil))")
-    }
-
-    // MARK: - Session lifecycle (generation-guarded retry)
-
-    private func openSession(generation gen: Int) {
-        guard running, gen == generation else { return }
-        let transport = TcpTransport(host: host, port: port)
-        let session = Session(transport: transport, role: "mac")
-        self.transport = transport
-        self.session = session
-
-        session.onConnected = { [weak self] in
-            guard let self, self.running, gen == self.generation else { return }
-            self.buildPipeline(caps: session.peerCaps, gen: gen)
-        }
-        // #58: follow tablet rotation IN PLACE — reconfigure switches the same display's mode and
-        // rebuilds only the producer; it never destroys the virtual display (see reconfigure()).
-        session.onCapsUpdate = { [weak self] caps in
-            self?.diag("onCapsUpdate fired: \(caps["screenWidth"] ?? "?")x\(caps["screenHeight"] ?? "?")")
-            self?.reconfigure(caps: caps, gen: gen)
-        }
-        session.onInput = { [weak self] data in
-            if let e = InputCodec.decode(data) { self?.injector?.inject(e) }
-        }
-        session.onText = { [weak self] t in self?.injector?.injectText(t) }
-        session.onError = { [weak self] _ in self?.retry(gen: gen) }
-        session.onClosed = { [weak self] in self?.retry(gen: gen) }
-        session.start()
-    }
-
-    private func retry(gen: Int) {
-        guard running, gen == generation else { return }
-        teardownSession()
-        stateSubject.send(.connecting)
-        let next = generation
-        DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.openSession(generation: next)
-        }
-    }
-
-    private func teardownSession() {
-        let prod = producer; producer = nil
-        if let prod {
-            let sem = DispatchSemaphore(value: 0)
-            Task { await prod.stop(); sem.signal() }
-            _ = sem.wait(timeout: .now() + 2)
-        }
-        transport?.stop()
-        session = nil; transport = nil; virtualDisplay = nil; injector = nil
     }
 
     // MARK: - Pipeline (built on connect, rebuilt on caps_update)
@@ -148,7 +186,7 @@ final class HostConnection: ConnectionEngine {
         cfg.serial = DisplaySerial.allocate()   // process-globally unique identity ⇒ always extends, never restores a mirror, never collides across simultaneous connections (#51/#58)
         let vd = VirtualDisplay(cfg)
         self.virtualDisplay = vd
-        self.injector = InputInjector(displayID: vd.displayID)
+        self.setInjector(InputInjector(displayID: vd.displayID))
         diag("buildPipeline \(cfg.pointWidth)x\(cfg.pointHeight) serial=\(cfg.serial) id=\(vd.displayID)")
         buildProducer(vd: vd, caps: caps, gen: gen)
     }
@@ -181,13 +219,8 @@ final class HostConnection: ConnectionEngine {
         Task { try? await prod.start() }
     }
 
-    /// Follow tablet rotation / resolution change by RECREATING the virtual display at the new
-    /// orientation. macOS rejects an in-place 90°-swapped mode switch on a virtual display
-    /// (`CGCompleteDisplayConfiguration` → kCGErrorIllegalArgument, verified via probe --rottest),
-    /// so we tear down the old display + producer and rebuild on a FRESH display. The new display
-    /// gets a unique serial (via buildPipeline) so macOS extends it instead of restoring a remembered
-    /// MIRROR. The connection (transport/session) is kept; the new producer emits a fresh
-    /// video_config + keyframe and the tablet decoder resyncs at the new size.
+    /// MUST run on lifeQ. Follow tablet rotation by recreating the virtual display at the new
+    /// orientation (an in-place 90° switch is rejected by CoreGraphics, #58).
     private func reconfigure(caps: [String: Any]?, gen: Int) {
         guard running, gen == generation, let vd = virtualDisplay else {
             diag("reconfigure skipped (running=\(running) gen=\(gen)/\(generation) hasVD=\(virtualDisplay != nil))"); return
@@ -198,7 +231,10 @@ final class HostConnection: ConnectionEngine {
         if mi.pointW == newCfg.pointWidth && mi.pointH == newCfg.pointHeight { diag("reconfigure no-change"); return }
         stateSubject.send(.connecting)
         let prod = producer; producer = nil
-        let oldVD = virtualDisplay; virtualDisplay = nil; injector = nil
+        let oldVD = virtualDisplay; virtualDisplay = nil; setInjector(nil)
+        // Heavy stop + CG settle OFF the serial queue, in order (stop capture → hold old display →
+        // settle), THEN hop back onto lifeQ to rebuild — so the rebuild never races other lifecycle
+        // steps and the new display is only created after the old one is fully gone.
         DispatchQueue.global().async { [weak self] in
             if let prod {
                 let sem = DispatchSemaphore(value: 0)
@@ -207,8 +243,10 @@ final class HostConnection: ConnectionEngine {
             }
             withExtendedLifetime(oldVD) {}         // keep the old display alive until capture has stopped
             Thread.sleep(forTimeInterval: 0.4)     // let CoreGraphics settle before recreating
-            guard let self, self.running, gen == self.generation else { return }
-            self.buildPipeline(caps: caps, gen: gen)   // fresh display + injector + producer at the new orientation
+            self?.lifeQ.async {
+                guard let self, self.running, gen == self.generation else { return }
+                self.buildPipeline(caps: caps, gen: gen)   // fresh display + injector + producer at the new orientation
+            }
         }
     }
 
@@ -239,11 +277,15 @@ final class HostConnection: ConnectionEngine {
         t.setEventHandler { [weak self] in
             guard let self else { return }
             self.frameLock.lock(); let now = self.frames; let b = self.bytes; self.bytes = 0; self.frameLock.unlock()
-            let delta = now - self.lastFrames
-            self.lastFrames = now
-            self.tele.fps = max(0, delta / 2)
-            self.tele.actualMbps = Int((Double(b) * 8.0 / 2.0 / 1_000_000.0).rounded())   // measured output over the 2s window
-            self.telemetrySubject.send(self.tele)
+            // Update + publish telemetry on lifeQ so `tele` (incl. its String fields) is touched on
+            // exactly one queue — never raced against buildProducer/connect/setBitrate.
+            self.lifeQ.async {
+                let delta = now - self.lastFrames
+                self.lastFrames = now
+                self.tele.fps = max(0, delta / 2)
+                self.tele.actualMbps = Int((Double(b) * 8.0 / 2.0 / 1_000_000.0).rounded())   // measured output over the 2s window
+                self.telemetrySubject.send(self.tele)
+            }
         }
         t.resume()
         fpsTimer = t
