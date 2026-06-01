@@ -4,10 +4,14 @@ import Foundation
 /// devices, and open a USB port-forward for a specific device. Used by `WiredDiscovery`
 /// (enumeration) and `HdcFportTunnel` (per-device tunnel).
 enum HdcTool {
-    /// Resolve the hdc binary. Prefer the copy bundled inside the app (so the user needs NO
-    /// DevEco install); fall back to a DevEco Studio / HarmonyOS-CLI location on dev machines.
+    /// Resolve the hdc binary. On Apple Silicon, prefer the copy bundled inside the app (so the user
+    /// needs NO DevEco install). The bundled hdc is arm64 (from the Apple-Silicon HarmonyOS SDK) — on
+    /// an Intel Mac an arm64 binary CANNOT run (Rosetta only translates x86→arm, not arm→x86), so on
+    /// x86_64 we skip the bundle and fall back to a system hdc (DevEco Studio / HarmonyOS Command Line
+    /// Tools, which are x86_64 on Intel). NOTE: if a UNIVERSAL hdc is ever bundled, drop the arch guard.
     static func path() -> String? {
         let fm = FileManager.default
+        #if arch(arm64)
         if let res = Bundle.main.resourceURL {
             let bundled = res.appendingPathComponent("hdc/hdc").path
             if fm.isExecutableFile(atPath: bundled) {
@@ -15,6 +19,7 @@ enum HdcTool {
                 return bundled
             }
         }
+        #endif
         let candidates = [
             "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc",
             "/Applications/DevEco-Studio.app/Contents/tools/hdc/hdc",

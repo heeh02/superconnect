@@ -32,14 +32,16 @@ if ! security find-certificate -c "$CN" "$KC" >/dev/null 2>&1; then
 fi
 security unlock-keychain -p "$KCPASS" "$KC" 2>/dev/null || true
 
-echo "▸ compiling (release)…"
-swift build -c release --product superconnect-app
+echo "▸ compiling (release, universal arm64 + x86_64)…"
+swift build -c release --arch arm64 --arch x86_64 --product superconnect-app
 
 APP="$HOME/Desktop/Superconnect.app"
 echo "▸ assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/superconnect-app "$APP/Contents/MacOS/superconnect-app"
+# Universal multi-arch build lands under .build/apple/Products/Release (not .build/release).
+cp .build/apple/Products/Release/superconnect-app "$APP/Contents/MacOS/superconnect-app"
+echo "▸ app binary archs: $(lipo -archs "$APP/Contents/MacOS/superconnect-app" 2>/dev/null || echo '?')"
 cp app/Info.plist "$APP/Contents/Info.plist"
 cp app/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"   # constellation icon (matches the tablet)
 
@@ -56,7 +58,14 @@ if [ -n "$HDC_SRC" ]; then
   mkdir -p "$APP/Contents/Resources/hdc"
   cp "$HDC_SRC/hdc" "$APP/Contents/Resources/hdc/"
   [ -f "$HDC_SRC/libusb_shared.dylib" ] && cp "$HDC_SRC/libusb_shared.dylib" "$APP/Contents/Resources/hdc/"
-  echo "▸ bundled hdc + libusb from $HDC_SRC"
+  HDC_ARCHS="$(lipo -archs "$APP/Contents/Resources/hdc/hdc" 2>/dev/null || echo '?')"
+  echo "▸ bundled hdc + libusb from $HDC_SRC (archs: $HDC_ARCHS)"
+  case "$HDC_ARCHS" in
+    *x86_64*) ;;  # universal/Intel hdc → self-contained on Intel too
+    *) echo "   ⚠️  hdc is arm64-only — on INTEL Macs the app runs (universal binary) but falls back to a"
+       echo "       system hdc (DevEco / HarmonyOS Command Line Tools). To make Intel self-contained too,"
+       echo "       drop an x86_64 hdc beside this one and lipo-merge into a universal hdc." ;;
+  esac
 else
   echo "⚠️  hdc NOT found on this build machine — the app will need DevEco at runtime (not self-contained)"
 fi
