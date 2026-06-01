@@ -14,6 +14,8 @@ import { PausedBanner } from '../ui/PausedBanner';
 import { WindowedView } from '../ui/WindowedView';
 import { ImeCatcher } from '../ui/ImeCatcher';
 import { InputOverlay } from '../ui/InputOverlay';
+import { RestoreHandle } from '../ui/RestoreHandle';
+import { BallGeometry, BallPos } from '../components/BallGeometry';
 import { common } from '@kit.AbilityKit';
 import hilog from '@ohos.hilog';
 import sc from 'libsuperconnect.so';
@@ -149,13 +151,12 @@ struct Index {
           this.surfaceW = Number(n.width);
           this.surfaceH = Number(n.height);
           if (this.surfaceW <= 0 || this.surfaceH <= 0) { return; }
-          if (this.ballX === 0 && this.ballY === 0) {
-            this.ballX = this.surfaceW - 56 - 12;
-            this.ballY = this.surfaceH / 2 - 28;
-          } else {
-            this.ballX = Math.min(Math.max(this.ballX, 12), this.surfaceW - 56 - 12);
-            this.ballY = Math.min(Math.max(this.ballY, 12), this.surfaceH - 56 - 12);
-          }
+          // First time → seed at the right edge; afterwards keep it on-screen. Math owned by BallGeometry.
+          const p: BallPos = (this.ballX === 0 && this.ballY === 0)
+            ? BallGeometry.seed(this.surfaceW, this.surfaceH)
+            : BallGeometry.clamp(this.ballX, this.ballY, this.surfaceW, this.surfaceH);
+          this.ballX = p.x;
+          this.ballY = p.y;
         })
 
       // The Mac screen renders here — always mounted (so the decoder surface persists); its size
@@ -196,11 +197,7 @@ struct Index {
         }
         // Tiny restore handle when the ball is hidden.
         if (this.surfaceW > 0 && this.ballHidden) {
-          Text('⋯')
-            .fontSize(20).fontColor('#FFFFFF').textAlign(TextAlign.Center)
-            .width(28).height(28).borderRadius(14).backgroundColor('#66202832')
-            .position({ x: this.surfaceW - 30, y: this.surfaceH / 2 - 14 }).zIndex(11)
-            .onClick(() => { this.ballHidden = false; })
+          RestoreHandle({ surfaceW: this.surfaceW, surfaceH: this.surfaceH, onRestore: () => { this.ballHidden = false; } })
         }
       }
 

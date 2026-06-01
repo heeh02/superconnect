@@ -61,8 +61,6 @@ public final class InputInjector {
 
     // Scroll: the tablet sends raw vp centroid deltas; scale to wheel pixels.
     private let scrollGain: CGFloat = 2.5 // TUNE on device
-    // Zoom: pinch spread delta (vp) → Cmd+scroll wheel pixels.
-    private let zoomGain: CGFloat = 1.5 // TUNE on device (fallback scroll-zoom only)
     // Magnify gesture: tablet sends a per-frame magnification ratio delta; scale it.
     private let magnifyGain: Double = 1.0 // TUNE on device
 
@@ -295,19 +293,6 @@ public final class InputInjector {
 
     private func cgField(_ id: UInt32) -> CGEventField { unsafeBitCast(id, to: CGEventField.self) }
 
-    // Fallback zoom for any app that ignores the real gesture: pinch → Cmd+scroll.
-    private func postZoomViaScroll(_ e: InputEvent) {
-        let point = globalPoint(e)
-        warpCursor(point)
-        let s = e.scrollY.isFinite ? CGFloat(e.scrollY) : 0
-        let wy = Int32(max(-100_000, min(100_000, (s * zoomGain).rounded())))
-        guard wy != 0, let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
-                                           wheelCount: 2, wheel1: wy, wheel2: 0, wheel3: 0) else { return }
-        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-        event.flags = .maskCommand // Cmd+scroll ⇒ zoom-at-cursor
-        event.post(tap: .cghidEventTap)
-    }
-
     // TRACKPAD (tool=Mouse): RELATIVE motion. x/y are device deltas — move the cursor
     // BY them from its current position so it roams ALL displays (not confined to the
     // virtual display). Clicks land at the current cursor position. heldButton (shared
@@ -350,10 +335,6 @@ public final class InputInjector {
             let secondary = (e.buttons & InputButtons.secondary.rawValue) != 0
             if secondary { heldMouseButton = .right; post(.rightMouseDown, p, .right, clickState: beginClick(.right, at: p)) }
             else { heldMouseButton = .left; post(.leftMouseDown, p, .left, clickState: beginClick(.left, at: p)) }
-            if let rb = CGEvent(source: nil)?.location {
-                print(String(format: "[inject] click vp=(%.0f,%.0f) readback=(%.0f,%.0f) Δ=(%.0f,%.0f)",
-                             p.x, p.y, rb.x, rb.y, p.x - rb.x, p.y - rb.y))
-            }
         case .touchUp:
             releaseHeldMouse(p)
         case .touchMove:

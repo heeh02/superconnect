@@ -12,6 +12,7 @@
  * from the gesture start, so we anchor on startX/startY in onActionStart.
  */
 import { Theme } from '../ui/Theme';
+import { BallGeometry } from './BallGeometry';
 
 @Component
 export struct FloatingBall {
@@ -22,19 +23,17 @@ export struct FloatingBall {
   @Prop screenH: number = 0; // vp
   onMenu?: () => void;       // long-press → open the control panel
   @State private dragging: boolean = false;
-  private readonly SIZE: number = 56;
-  private readonly MARGIN: number = 12;
   private startX: number = 0;
   private startY: number = 0;
 
   private clampY(v: number): number {
-    return Math.min(this.screenH - this.SIZE - this.MARGIN, Math.max(this.MARGIN, v));
+    return Math.min(this.screenH - BallGeometry.SIZE - BallGeometry.MARGIN, Math.max(BallGeometry.MARGIN, v));
   }
 
   private snap(): void {
     const mid: number = this.screenW / 2;
-    const tx: number = (this.ballX + this.SIZE / 2) < mid
-      ? this.MARGIN : (this.screenW - this.SIZE - this.MARGIN);
+    const tx: number = (this.ballX + BallGeometry.SIZE / 2) < mid
+      ? BallGeometry.MARGIN : (this.screenW - BallGeometry.SIZE - BallGeometry.MARGIN);
     const ty: number = this.clampY(this.ballY);
     animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
       this.ballX = tx;
@@ -45,12 +44,12 @@ export struct FloatingBall {
   build() {
     Stack() {
       Circle()
-        .width(this.SIZE).height(this.SIZE)
+        .width(BallGeometry.SIZE).height(BallGeometry.SIZE)
         .fill(this.drawing ? Theme.ballDraw : Theme.ballIdle)
       Text(this.drawing ? '✎' : '↖')
         .fontSize(24).fontColor('#FFFFFFFF')
     }
-    .width(this.SIZE).height(this.SIZE)
+    .width(BallGeometry.SIZE).height(BallGeometry.SIZE)
     .opacity(this.dragging ? 0.95 : 0.6)
     .shadow({ radius: 8, color: '#40000000', offsetX: 0, offsetY: 2 })
     .position({ x: this.ballX, y: this.ballY })
@@ -69,8 +68,8 @@ export struct FloatingBall {
             this.startY = this.ballY;
           })
           .onActionUpdate((e: GestureEvent): void => {
-            this.ballX = Math.min(this.screenW - this.SIZE, Math.max(0, this.startX + e.offsetX));
-            this.ballY = Math.min(this.screenH - this.SIZE, Math.max(0, this.startY + e.offsetY));
+            this.ballX = Math.min(this.screenW - BallGeometry.SIZE, Math.max(0, this.startX + e.offsetX));
+            this.ballY = Math.min(this.screenH - BallGeometry.SIZE, Math.max(0, this.startY + e.offsetY));
           })
           .onActionEnd((_e: GestureEvent): void => {
             this.dragging = false;
