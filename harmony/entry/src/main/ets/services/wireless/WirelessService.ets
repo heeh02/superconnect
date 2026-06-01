@@ -124,9 +124,11 @@ export class WirelessService {
     if (peerId === '') { return Promise.resolve(false); }         // can't TOFU an anonymous peer
     if (this.pairing.isTrusted(peerId)) { return Promise.resolve(true); }
     if (this.sessionDenied.indexOf(peerId) >= 0) { return Promise.resolve(false); }
-    // A new request supersedes any in-flight prompt (e.g. the previous client gave up). Don't deny
-    // the superseded peer — it may simply have lost the race.
-    this.settlePending(false, false);
+    // REFUSE (do NOT supersede) a second unknown peer while a prompt is in flight: superseding would
+    // silently re-target the visible dialog to the newcomer and let it ride the user's tap (a hijack,
+    // since deviceName is attacker-controlled). The refused peer is NOT denied — it may retry once the
+    // current prompt is answered or its connection is cancelled (cancelPairing on disconnect).
+    if (this.pendingResolve !== null) { return Promise.resolve(false); }
     return new Promise<boolean>((resolve: (allow: boolean) => void): void => {
       this.pendingResolve = resolve;
       this.pendingPeerId = peerId;
@@ -135,10 +137,26 @@ export class WirelessService {
       if (this.onPairingRequest !== null) { this.onPairingRequest(peerId, deviceName); }
     });
   }
-  private pendingDeviceName: string = '';
 
   /** The user tapped 允许 (true) or 拒绝 (false) in the pairing dialog. */
   respondPairing(allow: boolean): void { this.settlePending(allow, !allow); }
+
+  /**
+   * A connecting peer's session closed (or it gave up). If it owns the in-flight prompt, clear it
+   * immediately (dialog dismissed + slot freed) instead of waiting out the 60s timeout — so a peer
+   * that disconnected mid-prompt can't be trusted by a late tap, and the next peer isn't blocked.
+   */
+  cancelPairing(peerId: string): void {
+    if (this.pendingResolve !== null && peerId !== '' && peerId === this.pendingPeerId) {
+      this.settlePending(false, false);
+    }
+  }
+
+  /** App teardown: drop any pending prompt + stop advertising (avoid a lingering mDNS service). */
+  dispose(): void {
+    this.settlePending(false, false);
+    this.advertiser.unadvertise();
+  }
 
   /** Resolve the in-flight prompt. allow ⇒ trust + remember; deny ⇒ session-deny (no re-prompt). */
   private settlePending(allow: boolean, deny: boolean): void {

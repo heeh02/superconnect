@@ -17,7 +17,12 @@ export class ReceiverConnection implements ConnectionEngine {
   private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null;
   // Fired when the socket starts listening — WirelessService advertises over mDNS when on LAN.
   private onListeningFn: ((address: string, port: number) => void) | null;
+  // Fired with a disconnecting client's peerId — WirelessService clears a stale pairing prompt.
+  private onClientGoneFn: ((peerId: string) => void) | null;
   private transport: TcpServerTransport | null = null;
+  // Serializes restart() so two quick wireless toggles can't race close+relisten into a zombie
+  // listener / EADDRINUSE — each toggle's close→relisten runs strictly after the previous one.
+  private restartChain: Promise<void> = Promise.resolve();
   onStatus?: (s: ConnectionStatus) => void;
   onStreamInfo?: (info: StreamInfo) => void;
   onLog?: (msg: string) => void;
@@ -25,11 +30,13 @@ export class ReceiverConnection implements ConnectionEngine {
   constructor(port: number,
               bindAddressFn: () => string = (): string => '127.0.0.1',
               pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean) => Promise<boolean>) | null = null,
-              onListeningFn: ((address: string, port: number) => void) | null = null) {
+              onListeningFn: ((address: string, port: number) => void) | null = null,
+              onClientGoneFn: ((peerId: string) => void) | null = null) {
     this.port = port;
     this.bindAddressFn = bindAddressFn;
     this.pairingGate = pairingGate;
     this.onListeningFn = onListeningFn;
+    this.onClientGoneFn = onClientGoneFn;
   }
 
   start(): void {
@@ -52,6 +59,7 @@ export class ReceiverConnection implements ConnectionEngine {
       this.pairingGate,
     );
     this.transport.onListening = this.onListeningFn;
+    this.transport.onClientGone = this.onClientGoneFn;
     this.transport.start(this.port, this.bindAddressFn());
   }
 
@@ -63,12 +71,17 @@ export class ReceiverConnection implements ConnectionEngine {
   }
 
   /**
-   * Rebind to the CURRENT bindAddressFn() — called when the wireless mode is toggled. Closes the
-   * old listener first (awaited) so the port is free, then re-listens on the new address. Any
-   * in-flight stream drops; the page falls back to "listening". Wireless-only side door; the wired
-   * lifecycle (start/stop) is untouched.
+   * Rebind to the CURRENT bindAddressFn() — called when the wireless mode is toggled. Serialized via
+   * restartChain so rapid toggles can't interleave (close-A racing relisten-B → orphan listener /
+   * EADDRINUSE). Each step closes the old listener (awaited) before re-listening on the new address.
+   * Any in-flight stream drops; the page falls back to "listening". The wired start/stop is untouched.
    */
-  async restart(): Promise<void> {
+  restart(): Promise<void> {
+    this.restartChain = this.restartChain.then((): Promise<void> => this.doRestart());
+    return this.restartChain;
+  }
+
+  private async doRestart(): Promise<void> {
     const t: TcpServerTransport | null = this.transport;
     this.transport = null;
     if (t !== null) {

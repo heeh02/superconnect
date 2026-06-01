@@ -74,7 +74,10 @@ once; the symmetric *receiver* side (Mac being cast to by several hosts) is the 
 
 - **A new transport (e.g. Wi‑Fi/LAN)** = a new `Discovery` impl + a `TunnelService`/`Endpoint` case +
   **one line** in the composition root. No caller changes. (On the tablet, the listen address
-  `127.0.0.1` vs `0.0.0.0` is the wired-vs-wireless seam.)
+  `127.0.0.1` vs `0.0.0.0` is the wired-vs-wireless seam.) **Realized in v0.2.1 ✅** — Wi‑Fi LAN is a
+  self-contained module (`Services/Discovery/Wireless/` on Mac; `services/wireless/` on the tablet)
+  reusing `DirectTunnel`/`.tcp` + `TcpTransport` + `Session`; the wired path is byte-for-byte unchanged
+  when wireless is off. See `docs/WIRELESS.md`.
 - **A new role on a platform** = implement the `ConnectionEngine` for that cell + flip the
   `engineFor(role)` factory line. No coordinator/UI changes.
 - **A protocol change** = edit `proto/protocol.md` **and** `proto/vectors.json` **and** all three
@@ -84,6 +87,15 @@ once; the symmetric *receiver* side (Mac being cast to by several hosts) is the 
 
 ## 5. Multi-device transport strategy
 
+- **Wireless (Wi‑Fi LAN), ✅ built v0.2.1:** an isolated module realizing the transport seam of §4 —
+  the tablet binds `0.0.0.0` + advertises mDNS (`_superconnect._tcp`) **only after listen succeeds**;
+  the Mac discovers via `WirelessDiscovery` (NWBrowser → resolve `host:port`) and `ManualDiscovery`
+  (typed IPs), both dialed through the unchanged `DirectTunnel` → `TcpTransport` → `HostConnection`.
+  Security is **TOFU**: a LAN client must be approved once on the tablet (a persisted `peerId`
+  allow-list); `localhost` (hdc/USB, always `127.0.0.1`) is exempt, so wired stays frictionless. A
+  rejection (`{type:error, message:"pairing_rejected"}`) is fatal on the Mac (no retry storm). Wire
+  change = one **additive** `error.message` field; the conformance suite passes unchanged. Wireless
+  default-OFF ⇒ no LAN exposure unless opted in. Details: `docs/WIRELESS.md`.
 - **Layer A — connection-per-session (the chosen path, ✅ built #51):** multiple independent
   TCP/`hdc fport` connections, one `Session` each, keyed by `Device.id` in an app-layer registry
   (`ConnectionCoordinator` holds `[deviceID: ManagedConnection]`; each owns its own `HostConnection`

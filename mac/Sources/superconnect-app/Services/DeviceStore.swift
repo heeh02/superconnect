@@ -9,7 +9,10 @@ final class DeviceStore: ObservableObject {
     @Published private(set) var devices: [Device] = []
 
     private let sources: [DeviceDiscovery]
-    private var byKind: [TransportKind: [Device]] = [:]
+    /// Keyed by SOURCE identity (not `TransportKind`): several sources can share a kind — e.g. the
+    /// manual-IP and mDNS wireless sources are both `.wireless` — so keying on kind would let one
+    /// clobber the other's list. Each source owns its own slot; merge unions all slots.
+    private var bySource: [ObjectIdentifier: [Device]] = [:]
     private var bag = Set<AnyCancellable>()
     private var started = false
 
@@ -19,9 +22,10 @@ final class DeviceStore: ObservableObject {
         guard !started else { return }
         started = true
         for source in sources {
+            let sid = ObjectIdentifier(source)
             source.devices
                 .receive(on: RunLoop.main)
-                .sink { [weak self] devs in self?.merge(kind: source.kind, devs) }
+                .sink { [weak self] devs in self?.merge(sourceID: sid, devs) }
                 .store(in: &bag)
             source.start()
         }
@@ -29,14 +33,14 @@ final class DeviceStore: ObservableObject {
 
     func stop() { sources.forEach { $0.stop() } }
 
-    private func merge(kind: TransportKind, _ devs: [Device]) {
-        byKind[kind] = devs
+    private func merge(sourceID: ObjectIdentifier, _ devs: [Device]) {
+        bySource[sourceID] = devs
         var byId: [String: Device] = [:]
-        for list in byKind.values {
+        for list in bySource.values {
             for d in list {
                 if var existing = byId[d.id] {
                     existing.capabilities.formUnion(d.capabilities)
-                    byId[d.id] = existing       // first transport seen wins the badge
+                    byId[d.id] = existing       // first source seen wins the badge
                 } else {
                     byId[d.id] = d
                 }

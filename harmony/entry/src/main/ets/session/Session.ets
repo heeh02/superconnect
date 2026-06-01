@@ -90,6 +90,9 @@ export class Session {
     this.pairingGate = fn;
   }
 
+  /** The connected Mac's peerId ('' until hello / for a v1 peer). Used to cancel a stale pairing prompt. */
+  getPeerId(): string { return this.peerId; }
+
   /** Resolve once the client's localhost-vs-LAN tag is known, so the gate sees an accurate value. */
   private awaitClientInfo(): Promise<void> {
     if (this.clientInfoResolved) { return Promise.resolve(); }
@@ -185,7 +188,8 @@ export class Session {
     switch (msg.type) {
       case 'hello':
         // Async: the wireless pairing gate may await the user's 允许/拒绝 before we hello_ack.
-        this.onHello(msg);
+        // Fire-and-forget with a catch so a rejection can't surface as an unhandled promise.
+        this.onHello(msg).catch((e: Object): void => { this.log('onHello error ' + JSON.stringify(e)); });
         break;
       case 'ping':
         // Echo seq + original t0, add our own clock t1 (milliseconds).

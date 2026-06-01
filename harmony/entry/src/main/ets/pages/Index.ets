@@ -105,6 +105,7 @@ struct Index {
 
   aboutToDisappear(): void {
     this.manager?.stop();
+    this.env?.wireless.dispose();   // stop mDNS advertising + clear any pending pairing prompt
   }
 
   private appendLog(msg: string): void {

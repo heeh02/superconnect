@@ -82,12 +82,14 @@ final class WirelessDiscovery: DeviceDiscovery {
                     }
                 }
                 self.queue.async {
-                    self.resolving[name] = nil
+                    // Identity-guard: only clear/replace if THIS conn is still the tracked resolver
+                    // (a flapping service may have started a newer one for the same name).
+                    if self.resolving[name] === conn { self.resolving[name] = nil }
                     if let device { self.found[name] = device; self.publish() }
                 }
                 conn.cancel()
             case .failed, .cancelled:
-                self.queue.async { self.resolving[name] = nil }
+                self.queue.async { if self.resolving[name] === conn { self.resolving[name] = nil } }
                 conn.cancel()
             default:
                 break
@@ -98,14 +100,13 @@ final class WirelessDiscovery: DeviceDiscovery {
 
     private func publish() { subject.send(Array(found.values).sorted { $0.name < $1.name }) }
 
-    /// A dial-able string for `TcpTransport`. Prefer IPv4; strip an IPv6 `%zone` a fresh
-    /// `NWConnection(host:)` would reject.
+    /// A dial-able string for `TcpTransport`. For IPv6 KEEP the `%zone` — a link-local address
+    /// (`fe80::…`, common from Bonjour on a LAN) is undialable without it, and `NWEndpoint.Host`
+    /// accepts the zoned form.
     private static func string(from host: NWEndpoint.Host) -> String {
         switch host {
         case .ipv4(let a): return a.debugDescription
-        case .ipv6(let a):
-            let s = a.debugDescription
-            return s.contains("%") ? String(s.split(separator: "%").first ?? "") : s
+        case .ipv6(let a): return a.debugDescription
         case .name(let n, _): return n
         @unknown default: return ""
         }
