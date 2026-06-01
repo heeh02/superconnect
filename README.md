@@ -101,11 +101,10 @@ Mac 应用**已内置 `hdc`**（华为设备连接工具），所以 **Mac 端�
 
 一句话原理：Mac 用 `CGVirtualDisplay` 造一块扩展屏 → `ScreenCaptureKit` 采集 → `VideoToolbox` 硬编码 → 经 `hdc fport`（USB 上的 TCP）传给平板 → 平板硬解码并渲染；触控/手写/键盘反向回传，Mac 端转成系统事件注入。同一套传输代码为将来的**局域网无线**和**任意设备互投**预留了接口。
 
-无设备也能验证核心（跨语言协议一致性）：
+无设备也能验证核心（三端跨语言协议一致性，含 ArkTS）：
 
 ```bash
-cd mac && swift test                 # 协议 + 输入编解码黄金向量
-cd ../shared/cpp/tests && make test  # C++ 实现与 Swift 逐字节一致
+tools/check-protocol.sh   # Swift + C++ + ArkTS 全部对照 proto/vectors.json（ArkTS 校验需 Node ≥ 22.7）
 ```
 
 ---

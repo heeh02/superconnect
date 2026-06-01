@@ -75,7 +75,7 @@
 - **架构已预留对称角色**：`ConnectionEngine` + `Role`（Host / Receiver）。每端已是 `HostConnection` / `ReceiverConnection` 一真一桩；启用某端的对称方向 = 实现对应桩 + 改 `AppEnvironment.engineForRole` 一行，其余层不动。
 - **逐平台落地**：每平台各自实现 Host（屏幕采集 + 编码 + 输入注入）与 Receiver（解码 + 渲染 + 输入采集）引擎；线协议（`proto/`）跨平台复用、已用 golden vectors 锁定一致性。
 - **依赖的协议演进**（见 `ARCHITECTURE.md`）：
-  - **Phase 2**：协议一致性测试台（golden vectors 跨 Swift / ArkTS / C++ 自动校验）。
+  - **Phase 2 ✅**：协议一致性测试台 —— `tools/check-protocol.sh` 跨 Swift / C++ / ArkTS 三端对照 `proto/vectors.json`（ArkTS 经 Node 无设备校验，含负向漂移检测）。
   - **Phase 5**：向后兼容 v2 握手（`peerId` + host/receiver 角色协商 + 能力位 + 保留字段）。
   - **Phase 6**：多会话注册表（Layer A：每会话一连接、`peerId` 索引，零线协议改动即可多机并存）。
   - **Layer B（远期）**：`sessionId` 复用单连接。
