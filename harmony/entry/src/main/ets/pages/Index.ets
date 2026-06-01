@@ -12,6 +12,8 @@ import { IdleView } from '../ui/IdleView';
 import { ControlPanel } from '../ui/ControlPanel';
 import { PausedBanner } from '../ui/PausedBanner';
 import { WindowedView } from '../ui/WindowedView';
+import { ImeCatcher } from '../ui/ImeCatcher';
+import { InputOverlay } from '../ui/InputOverlay';
 import { common } from '@kit.AbilityKit';
 import hilog from '@ohos.hilog';
 import sc from 'libsuperconnect.so';
@@ -28,7 +30,6 @@ struct Index {
   @State surfaceH: number = 0;
   @State ballX: number = 0;
   @State ballY: number = 0;
-  @State imeText: string = '';        // hidden IME catcher buffer (cleared after each commit)
   // GUI state
   @State private showPanel: boolean = false;   // control panel (settings / cheat-sheet / toggles)
   @State private ballHidden: boolean = false;  // quick toggle: hide the floating ball
@@ -38,7 +39,6 @@ struct Index {
   @State private vCodec: string = '';
   // Bumped by EntryAbility.onNewWant when the "exit fullscreen" notification is tapped.
   @StorageLink('scExitFullscreen') @Watch('onExitFsRequest') private exitFsReq: number = 0;
-  private imeCtrl: TextInputController = new TextInputController();
   private kbd: KeyboardHandler | null = null;   // physical + soft keyboard → Mac (owns metaHeld)
   private env: AppEnvironment | null = null;    // composition root (selects the role engine)
   private manager: ConnectionManager | null = null;   // connection lifecycle (from env)
@@ -115,18 +115,16 @@ struct Index {
     this.displayMode = DisplayMode.Fullscreen;
     WindowMode.apply(this.ctx(), DisplayMode.Fullscreen, (m: string): void => { this.appendLog(m); });
     FullscreenNotification.show(this.ctx(), (m: string): void => { this.appendLog(m); });
-    this.refocusIme();   // entering fullscreen mounts the IME catcher — make sure it owns the keyboard
+    // ImeCatcher grabs focus itself when `active` flips true — no manual refocus needed here.
   }
 
-  // Give keyboard focus back to the hidden IME catcher. defaultFocus(true) only fires on the page's
-  // first focus pass, NOT when the catcher is (re)mounted on entering fullscreen, and the control
-  // panel's buttons/toggles steal focus while open — so we re-request it explicitly. Deferred so it
-  // runs AFTER the current view update (panel unmount / window-mode transition), else focus can
-  // bounce back to a just-removed control. Without this the soft keyboard never pops and
-  // onKeyPreIme never fires (physical keys dead) — the #53 windowed-mode regression. (#kbd-focus)
+  // Re-assert keyboard focus after a focus-stealing modal (control panel / paused banner) closes.
+  // The ImeCatcher stays mounted while streaming and self-focuses on (re)mount + on becoming active,
+  // so this is ONLY for the modal case (those controls take focus while open, the catcher doesn't
+  // remount). Deferred so it runs after the modal is actually torn down.
   private refocusIme(): void {
-    if (!this.streaming()) { return; }
-    setTimeout((): void => { focusControl.requestFocus('imecatcher'); }, 50);
+    if (!this.fullscreen()) { return; }
+    setTimeout((): void => { focusControl.requestFocus(ImeCatcher.ID); }, 50);
   }
 
   private exitFullscreen(): void {
@@ -168,40 +166,17 @@ struct Index {
         .height(this.windowed() ? this.windowedH() : '100%')
         .borderRadius(this.windowed() ? 14 : 0)
 
-      // ── Fullscreen: input capture + IME + floating ball + control panel (today's behavior) ──
-      if (this.fullscreen()) {
-        // Transparent layer ON TOP that reliably captures touch in ArkTS.
-        Column()
-          .width('100%').height('100%').backgroundColor('#00000000')
-          .hitTestBehavior(this.inputDisabled ? HitTestMode.None : HitTestMode.Block)
-          .onTouch((e: TouchEvent) => { this.router?.onTouch(e); })
-          .onMouse((e: MouseEvent) => { this.router?.onMouse(e); })        // trackpad cursor/click/drag
-          .onAxisEvent((e: AxisEvent) => { this.router?.onAxis(e); })      // trackpad scroll/pinch
-          .focusable(false)   // never steal key focus from the hidden IME catcher
+      // Keyboard capture — mounted for the WHOLE streaming session (NOT gated on fullscreen), so a
+      // display-mode change can never unmount it again (the #53 coupling that killed the keyboard).
+      // `active` = fullscreen drives focus only, never mounting.
+      if (this.streaming()) {
+        ImeCatcher({ kbd: this.kbd, active: this.fullscreen() })
+      }
 
-        // Hidden, focused TextInput that owns the physical keyboard.
-        TextInput({ text: this.imeText, controller: this.imeCtrl })
-          .id('imecatcher')
-          .focusable(true)
-          .defaultFocus(true)
-          .opacity(0)
-          .width(1)
-          .height(1)
-          .onAppear(() => { this.refocusIme(); })   // grab the keyboard the moment we enter fullscreen (#kbd-focus)
-          .onKeyPreIme((e: KeyEvent): boolean => {
-            return this.kbd?.onKeyPreIme(e) ?? false;   // physical keys → Mac
-          })
-          .onWillInsert((info: InsertValue): boolean => {
-            return this.kbd?.onWillInsert(info) ?? false;
-          })
-          .onChange((value: string, preview?: PreviewText): void => {
-            this.kbd?.onCommit(value, preview);   // 3rd-party IME commit → Mac
-            this.imeText = '';
-            this.imeCtrl.caretPosition(0);
-          })
-          .onWillDelete((info: DeleteValue): boolean => {
-            return this.kbd?.onWillDelete(info) ?? false;   // soft backspace/del → Mac keystroke
-          })
+      // ── Fullscreen: input capture + floating ball + control panel ──
+      if (this.fullscreen()) {
+        // Touch + trackpad capture — its own module, mounted on top to grab events.
+        InputOverlay({ router: this.router, disabled: this.inputDisabled })
 
         // Paused banner — safe way back when input capture is paused.
         if (this.inputDisabled) {
