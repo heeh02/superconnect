@@ -20,10 +20,10 @@
 
 | | 要求 |
 |---|---|
-| Mac | macOS 14 及以上、Apple Silicon（M 系列）。实测 macOS 26.5。 |
+| Mac | macOS 14 及以上，**Apple Silicon 或 Intel**（通用二进制）。实测 macOS 26.5 / Apple Silicon。 |
 | 平板 | 华为平板，HarmonyOS NEXT，**已开启开发者模式**。实测 MatePad Pro 13.2。 |
 | 数据线 | 一根能传数据的 USB-C 线（连接 Mac 与平板）。 |
-| 软件 | **Mac 端无需任何额外软件**——应用已内置连接所需的 `hdc`。（只有当你想自己构建平板端 App 时才需要 DevEco Studio。） |
+| 软件 | **Apple Silicon 上 Mac 端无需任何额外软件**——应用已内置连接所需的 `hdc`。**Intel Mac**：应用可运行，但内置 `hdc` 为 arm64，无法在 Intel 上执行，需另装系统 `hdc`（DevEco Studio 或 HarmonyOS 命令行工具，Intel 版）。（自行构建平板端 App 才需要 DevEco Studio。） |
 
 > 安装分两端：**Mac 端**从 Releases 下载安装包（已内置 `hdc`，开箱即用）；**平板端**走应用市场（上架审核中）或用 DevEco 自行构建。
 
