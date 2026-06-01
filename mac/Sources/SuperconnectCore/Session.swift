@@ -127,6 +127,7 @@ public final class Session {
             // Tablet rotated / changed resolution → updated panel caps. Re-negotiate the display.
             peerCaps = object["caps"] as? [String: Any]
             onLog?("received caps_update from peer")
+            NSLog("SCDIAG mac received caps_update")
             if let caps = peerCaps { onCapsUpdate?(caps) }
         case "hello":
             // We are the client in Phase 0; a hello here would be unexpected, but be lenient.

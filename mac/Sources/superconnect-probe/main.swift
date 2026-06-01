@@ -74,6 +74,75 @@ if hasFlag("--hdrdump") {
     exit(0)
 }
 
+// ─────────────── #58 rotation: WHY does the in-place mode switch fail? ───────────────
+//   swift run superconnect-probe --rottest
+// Headless (no TCC, no tablet): create the app's exact LANDSCAPE virtual display, dump its full
+// mode list, then attempt the in-place PORTRAIT switch exactly as HostConnection.setMode does —
+// under all three CGConfigureOption scopes — logging each step. Tells us (a) is the portrait mode
+// even listed, and (b) does ANY scope actually switch a virtual display in place.
+if hasFlag("--rottest") {
+    let cfg = VirtualDisplayConfig(pointWidth: 1440, pointHeight: 960, scale: 2, refreshRate: 120)
+    let vdr = VirtualDisplay(cfg)
+    Thread.sleep(forTimeInterval: 0.8)
+    let did = vdr.displayID
+    let mi0 = vdr.modeInfo()
+    print("[rot] landscape vd id=\(did) pt=\(mi0.pointW)×\(mi0.pointH) px=\(mi0.pixelW)×\(mi0.pixelH) mirrored=\(vdr.isMirrored())")
+
+    let opts = [kCGDisplayShowDuplicateLowResolutionModes as String: true] as CFDictionary
+    let modes = (CGDisplayCopyAllDisplayModes(did, opts) as? [CGDisplayMode]) ?? []
+    print("[rot] all listed modes (count=\(modes.count)):")
+    for m in modes {
+        print("[rot]   pt=\(m.width)×\(m.height) px=\(m.pixelWidth)×\(m.pixelHeight) @\(Int(m.refreshRate)) gui=\(m.isUsableForDesktopGUI())")
+    }
+    let candidates = modes.filter { $0.width == 960 && $0.pixelWidth == 1920 }
+    print("[rot] portrait candidates (w==960 && px==1920) = \(candidates.count)")
+    guard let target = candidates.max(by: { $0.refreshRate < $1.refreshRate }) else {
+        print("[rot] VERDICT: portrait mode is NOT listed → macOS won't expose the 90°-swapped mode for a virtual display. In-place switch is impossible; rotation must RECREATE the display.")
+        exit(0)
+    }
+    func trySwitch(_ scope: CGConfigureOption, _ label: String) {
+        var ref: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&ref) == .success, let ref else { print("[rot] [\(label)] begin FAILED"); return }
+        let r1 = CGConfigureDisplayWithDisplayMode(ref, did, target, nil)
+        CGConfigureDisplayMirrorOfDisplay(ref, did, kCGNullDirectDisplay)
+        let r2 = CGCompleteDisplayConfiguration(ref, scope)
+        Thread.sleep(forTimeInterval: 0.9)
+        let mi = vdr.modeInfo()
+        let ok = (mi.pointW == 960)
+        print("[rot] [\(label)] configErr=\(r1.rawValue) completeErr=\(r2.rawValue) → now pt=\(mi.pointW)×\(mi.pointH) px=\(mi.pixelW)×\(mi.pixelH)  \(ok ? "✅ SWITCHED" : "✗ unchanged")")
+    }
+    trySwitch(.forSession, "forSession")
+    trySwitch(.permanently, "permanently")
+    trySwitch(.forAppOnly, "forAppOnly")
+    print("[rot] done.")
+    exit(0)
+}
+
+// ─────────────── #58 rotation via RECREATE (the viable path) ─────────────────────────
+//   swift run superconnect-probe --recreatetest
+// Headless (no TCC): create the LANDSCAPE display, release it (rotation), then create the PORTRAIT
+// display with a FRESH serial. Confirms a fresh-identity display comes up EXTENDED (not the
+// remembered MIRROR that the old same-serial recreate produced).
+if hasFlag("--recreatetest") {
+    func make(_ label: String, _ pw: Int, _ ph: Int, _ serial: UInt32) -> VirtualDisplay {
+        let cfg = VirtualDisplayConfig(pointWidth: pw, pointHeight: ph, scale: 2, refreshRate: 120, serial: serial)
+        let vd = VirtualDisplay(cfg)
+        Thread.sleep(forTimeInterval: 1.0)
+        let mi = vd.modeInfo()
+        print("[recreate] \(label) serial=\(serial) id=\(vd.displayID) pt=\(mi.pointW)×\(mi.pointH) px=\(mi.pixelW)×\(mi.pixelH) active=\(vd.isActiveInCoreGraphics()) mirrored=\(vd.isMirrored())")
+        return vd
+    }
+    var vd: VirtualDisplay? = make("landscape", 1440, 960, 1)
+    print("[recreate] --- rotate: release landscape, create portrait with a FRESH serial ---")
+    vd = nil                                   // release → CGVirtualDisplay deallocates → display removed
+    Thread.sleep(forTimeInterval: 1.0)
+    vd = make("portrait ", 960, 1440, 2)
+    let mi = vd!.modeInfo()
+    let good = mi.pointW == 960 && mi.pointH == 1440 && !vd!.isMirrored() && vd!.isActiveInCoreGraphics()
+    print("[recreate] VERDICT: \(good ? "✅ recreate+fresh-serial WORKS — portrait, extended, active" : "✗ still wrong (mirrored/inactive/wrong dims)")")
+    exit(0)
+}
+
 let doCapture = hasFlag("--capture")
 let seconds = Double(value("--seconds") ?? "5") ?? 5
 let fps = Int(value("--fps") ?? "60") ?? 60

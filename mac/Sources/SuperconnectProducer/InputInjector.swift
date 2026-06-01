@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import ApplicationServices
+import AppKit
 import SuperconnectCore
 
 /// Injects received InputEvents into macOS as CGEvents.
@@ -31,6 +32,32 @@ public final class InputInjector {
     // we just press/drag/release whatever button it tells us so Move maps to the
     // matching *Dragged and Up releases the correct button.
     private var heldButton: CGMouseButton? = nil
+
+    // Click-count aggregation. The window server does NOT coalesce synthesized CGEvents into
+    // double/triple clicks, so without this a double-tap arrives as two single clicks and
+    // title-bar double-click-to-zoom, word/line select, etc. never fire. We count clicks
+    // ourselves: a same-button down within the system double-click interval AND within
+    // `clickSlop` of the previous one bumps the count (1→2→3); otherwise it resets to 1. The
+    // count is stamped on the down / drag / up via .mouseEventClickState so macOS treats it as
+    // a real multi-click. Shared by finger + trackpad (one cursor, one tool at a time).
+    private var clickState: Int64 = 1
+    private var lastDownTime: CFTimeInterval = 0
+    private var lastDownPos: CGPoint = .zero
+    private var lastDownButton: CGMouseButton? = nil
+    private let clickSlop: CGFloat = 12   // global points; generous for finger taps
+    private lazy var doubleClickInterval: CFTimeInterval = NSEvent.doubleClickInterval
+
+    private func beginClick(_ button: CGMouseButton, at p: CGPoint) -> Int64 {
+        let now = CFAbsoluteTimeGetCurrent()
+        let near = hypot(p.x - lastDownPos.x, p.y - lastDownPos.y) <= clickSlop
+        if button == lastDownButton, now - lastDownTime <= doubleClickInterval, near {
+            clickState += 1
+        } else {
+            clickState = 1
+        }
+        lastDownTime = now; lastDownPos = p; lastDownButton = button
+        return clickState
+    }
 
     // Scroll: the tablet sends raw vp centroid deltas; scale to wheel pixels.
     private let scrollGain: CGFloat = 2.5 // TUNE on device
@@ -171,18 +198,18 @@ public final class InputInjector {
         let primary   = (e.buttons & InputButtons.primary.rawValue) != 0
         switch type {
         case .touchDown:
-            if secondary { heldButton = .right; post(.rightMouseDown, point, .right) }
-            else if primary { heldButton = .left; post(.leftMouseDown, point, .left) }
+            if secondary { heldButton = .right; post(.rightMouseDown, point, .right, clickState: beginClick(.right, at: point)) }
+            else if primary { heldButton = .left; post(.leftMouseDown, point, .left, clickState: beginClick(.left, at: point)) }
             else { post(.mouseMoved, point, .left) }       // buttons=0: cursor warp only
         case .touchMove:
-            if heldButton == .right { post(.rightMouseDragged, point, .right) }
-            else if heldButton == .left { post(.leftMouseDragged, point, .left) }
+            if heldButton == .right { post(.rightMouseDragged, point, .right, clickState: clickState) }
+            else if heldButton == .left { post(.leftMouseDragged, point, .left, clickState: clickState) }
             else { post(.mouseMoved, point, .left) }
         case .hover:
             post(.mouseMoved, point, .left)                 // pending-window cursor tracking
         case .touchUp:
-            if heldButton == .right { post(.rightMouseUp, point, .right) }
-            else if heldButton == .left { post(.leftMouseUp, point, .left) }
+            if heldButton == .right { post(.rightMouseUp, point, .right, clickState: clickState) }
+            else if heldButton == .left { post(.leftMouseUp, point, .left, clickState: clickState) }
             else { post(.mouseMoved, point, .left) }        // tracked-only finger lifting
             heldButton = nil
         default: break
@@ -199,9 +226,11 @@ public final class InputInjector {
                        y: bounds.minY + CGFloat(ny) * bounds.height)
     }
 
-    private func post(_ type: CGEventType, _ point: CGPoint, _ button: CGMouseButton) {
-        CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: button)?
-            .post(tap: .cghidEventTap)
+    private func post(_ type: CGEventType, _ point: CGPoint, _ button: CGMouseButton, clickState: Int64 = 0) {
+        guard let ev = CGEvent(mouseEventSource: source, mouseType: type,
+                               mouseCursorPosition: point, mouseButton: button) else { return }
+        if clickState > 0 { ev.setIntegerValueField(.mouseEventClickState, value: clickState) }
+        ev.post(tap: .cghidEventTap)
     }
 
     private func postPen(_ type: CGEventType, _ point: CGPoint, _ e: InputEvent) {
@@ -290,8 +319,8 @@ public final class InputInjector {
     private var virtualPos: CGPoint? = nil
 
     private func releaseHeldMouse(_ p: CGPoint) {
-        if heldMouseButton == .right { post(.rightMouseUp, p, .right) }
-        else if heldMouseButton == .left { post(.leftMouseUp, p, .left) }
+        if heldMouseButton == .right { post(.rightMouseUp, p, .right, clickState: clickState) }
+        else if heldMouseButton == .left { post(.leftMouseUp, p, .left, clickState: clickState) }
         heldMouseButton = nil
     }
 
@@ -319,8 +348,8 @@ public final class InputInjector {
             // tablet now FREEZES the cursor during the press so virtualPos == where you aimed.
             releaseHeldMouse(p)   // a prior up may have been missed — never stack two downs
             let secondary = (e.buttons & InputButtons.secondary.rawValue) != 0
-            if secondary { heldMouseButton = .right; post(.rightMouseDown, p, .right) }
-            else { heldMouseButton = .left; post(.leftMouseDown, p, .left) }
+            if secondary { heldMouseButton = .right; post(.rightMouseDown, p, .right, clickState: beginClick(.right, at: p)) }
+            else { heldMouseButton = .left; post(.leftMouseDown, p, .left, clickState: beginClick(.left, at: p)) }
             if let rb = CGEvent(source: nil)?.location {
                 print(String(format: "[inject] click vp=(%.0f,%.0f) readback=(%.0f,%.0f) Δ=(%.0f,%.0f)",
                              p.x, p.y, rb.x, rb.y, p.x - rb.x, p.y - rb.y))
@@ -330,8 +359,8 @@ public final class InputInjector {
         case .touchMove:
             p.x += dx * mouseGain; p.y += dy * mouseGain
             p = clampToUnion(p); virtualPos = p
-            if heldMouseButton == .right { post(.rightMouseDragged, p, .right) }
-            else if heldMouseButton == .left { post(.leftMouseDragged, p, .left) }
+            if heldMouseButton == .right { post(.rightMouseDragged, p, .right, clickState: clickState) }
+            else if heldMouseButton == .left { post(.leftMouseDragged, p, .left, clickState: clickState) }
             else { post(.mouseMoved, p, .left) }
         case .hover:
             if heldMouseButton != nil { releaseHeldMouse(p) }   // self-heal a missed release (own state only)

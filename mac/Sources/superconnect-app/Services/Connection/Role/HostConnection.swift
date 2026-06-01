@@ -26,6 +26,7 @@ final class HostConnection: ConnectionEngine {
     private var virtualDisplay: VirtualDisplay?
     private var producer: Producer?
     private var injector: InputInjector?
+    private let displayGuard = DisplayModeGuard()   // keep the Mac's own displays at the user's resolution (#58)
 
     private var fpsTimer: DispatchSourceTimer?
     private let frameLock = NSLock()
@@ -34,6 +35,7 @@ final class HostConnection: ConnectionEngine {
 
     private var running = false
     private var generation = 0
+    private var displaySerial: UInt32 = 0   // unique CGVirtualDisplay identity per build (#58 anti-mirror)
     private var tele = SessionTelemetry()
 
     // MARK: - ConnectionEngine
@@ -45,6 +47,7 @@ final class HostConnection: ConnectionEngine {
         generation += 1
         tele = SessionTelemetry(); tele.bitrateMbps = bitrateMbps
         stateSubject.send(.connecting)
+        displayGuard.start()   // snapshot + pin the user's real-display resolution before adding the virtual one
         startFpsTimer()
         openSession(generation: generation)
     }
@@ -53,6 +56,7 @@ final class HostConnection: ConnectionEngine {
         running = false
         generation += 1
         fpsTimer?.cancel(); fpsTimer = nil
+        displayGuard.stop()   // macOS restores the user's resolution once the virtual display is gone
         // Heavy teardown (producer.stop awaits VTCompressionSession invalidate) off the
         // main thread so the UI never hangs; generation bump already neutered callbacks.
         let prod = producer; producer = nil
@@ -82,11 +86,12 @@ final class HostConnection: ConnectionEngine {
             guard let self, self.running, gen == self.generation else { return }
             self.buildPipeline(caps: session.peerCaps, gen: gen)
         }
-        // #58 rotation re-negotiation DISABLED: destroying + recreating the CGVirtualDisplay
-        // mid-session is unreliable (loses the display; macOS restores a remembered MIRROR
-        // arrangement on the rebuilt one). Pending a reconfigure-in-place redesign. The tablet
-        // may still send caps_update; we intentionally ignore it.
-        // session.onCapsUpdate = { [weak self] caps in self?.reconfigure(caps: caps, gen: gen) }
+        // #58: follow tablet rotation IN PLACE — reconfigure switches the same display's mode and
+        // rebuilds only the producer; it never destroys the virtual display (see reconfigure()).
+        session.onCapsUpdate = { [weak self] caps in
+            self?.diag("onCapsUpdate fired: \(caps["screenWidth"] ?? "?")x\(caps["screenHeight"] ?? "?")")
+            self?.reconfigure(caps: caps, gen: gen)
+        }
         session.onInput = { [weak self] data in
             if let e = InputCodec.decode(data) { self?.injector?.inject(e) }
         }
@@ -119,18 +124,29 @@ final class HostConnection: ConnectionEngine {
 
     // MARK: - Pipeline (built on connect, rebuilt on caps_update)
 
-    /// Build the capture→encode→stream pipeline for the given panel caps: a matching virtual
-    /// display, an injector bound to it, and a producer (which sends video_config + a keyframe).
+    /// Build the full pipeline on connect: a virtual display matching the panel, an injector bound
+    /// to it, and the producer.
     private func buildPipeline(caps: [String: Any]?, gen: Int) {
-        guard running, gen == generation, let session = self.session, let transport = self.transport else { return }
-        let negCodec = codec(from: caps)
-        let negHdr = hdrEnabled(from: caps)
+        guard running, gen == generation else { return }
         var cfg = displayConfig(from: caps)
-        cfg.hdr = negHdr   // HDR reference display → macOS keeps EDR headroom
+        cfg.hdr = hdrEnabled(from: caps)   // HDR reference display → macOS keeps EDR headroom
+        displaySerial &+= 1
+        cfg.serial = displaySerial         // fresh identity each build ⇒ always extends, never restores a mirror (#58)
         let vd = VirtualDisplay(cfg)
         self.virtualDisplay = vd
         self.injector = InputInjector(displayID: vd.displayID)
-        let negFps = Int(cfg.refreshRate)
+        diag("buildPipeline \(cfg.pointWidth)x\(cfg.pointHeight) serial=\(displaySerial) id=\(vd.displayID)")
+        buildProducer(vd: vd, caps: caps, gen: gen)
+    }
+
+    /// Create + start the capture→encode→stream producer for an existing virtual display (sends
+    /// video_config + a keyframe). Reused on connect and on rotation, where the display + injector
+    /// are kept and only the producer is rebuilt at the new size.
+    private func buildProducer(vd: VirtualDisplay, caps: [String: Any]?, gen: Int) {
+        guard running, gen == generation, let session = self.session, let transport = self.transport else { return }
+        let negCodec = codec(from: caps)
+        let negHdr = hdrEnabled(from: caps)
+        let negFps = Int(displayConfig(from: caps).refreshRate)
         let mi = vd.modeInfo()
         self.tele.resolution = "\(mi.pointW)×\(mi.pointH)"
         self.tele.codec = negCodec.rawValue.uppercased() + (negHdr ? " · HDR10" : "")
@@ -151,25 +167,46 @@ final class HostConnection: ConnectionEngine {
         Task { try? await prod.start() }
     }
 
-    /// Re-negotiate when the tablet rotates / changes resolution: if the new caps map to different
-    /// display dimensions, cleanly stop the producer + release the old virtual display (no leak),
-    /// then rebuild the pipeline at the new size. The transport/session stay up.
+    /// Follow tablet rotation / resolution change by RECREATING the virtual display at the new
+    /// orientation. macOS rejects an in-place 90°-swapped mode switch on a virtual display
+    /// (`CGCompleteDisplayConfiguration` → kCGErrorIllegalArgument, verified via probe --rottest),
+    /// so we tear down the old display + producer and rebuild on a FRESH display. The new display
+    /// gets a unique serial (via buildPipeline) so macOS extends it instead of restoring a remembered
+    /// MIRROR. The connection (transport/session) is kept; the new producer emits a fresh
+    /// video_config + keyframe and the tablet decoder resyncs at the new size.
     private func reconfigure(caps: [String: Any]?, gen: Int) {
-        guard running, gen == generation, let vd = virtualDisplay else { return }
+        guard running, gen == generation, let vd = virtualDisplay else {
+            diag("reconfigure skipped (running=\(running) gen=\(gen)/\(generation) hasVD=\(virtualDisplay != nil))"); return
+        }
         let newCfg = displayConfig(from: caps)
         let mi = vd.modeInfo()
-        if mi.pointW == newCfg.pointWidth && mi.pointH == newCfg.pointHeight { return }   // no real change
+        diag("reconfigure new=\(newCfg.pointWidth)x\(newCfg.pointHeight) cur=\(mi.pointW)x\(mi.pointH)")
+        if mi.pointW == newCfg.pointWidth && mi.pointH == newCfg.pointHeight { diag("reconfigure no-change"); return }
         stateSubject.send(.connecting)
         let prod = producer; producer = nil
-        virtualDisplay = nil; injector = nil
+        let oldVD = virtualDisplay; virtualDisplay = nil; injector = nil
         DispatchQueue.global().async { [weak self] in
             if let prod {
                 let sem = DispatchSemaphore(value: 0)
                 Task { await prod.stop(); sem.signal() }
                 _ = sem.wait(timeout: .now() + 2)
             }
+            withExtendedLifetime(oldVD) {}         // keep the old display alive until capture has stopped
+            Thread.sleep(forTimeInterval: 0.4)     // let CoreGraphics settle before recreating
             guard let self, self.running, gen == self.generation else { return }
-            self.buildPipeline(caps: caps, gen: gen)
+            self.buildPipeline(caps: caps, gen: gen)   // fresh display + injector + producer at the new orientation
+        }
+    }
+
+    /// Append a diagnostic line to /tmp/sc-mac-diag.log (NSLog isn't captured for this app).
+    private func diag(_ s: String) {
+        let path = "/tmp/sc-mac-diag.log"
+        let line = s + "\n"
+        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+        if let h = FileHandle(forWritingAtPath: path) {
+            h.seekToEndOfFile()
+            if let d = line.data(using: .utf8) { h.write(d) }
+            try? h.close()
         }
     }
 

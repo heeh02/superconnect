@@ -7,6 +7,7 @@
 import util from '@ohos.util';
 import { display } from '@kit.ArkUI';
 import { Callback } from '@ohos.base';
+import hilog from '@ohos.hilog';
 import sc from 'libsuperconnect.so';
 import { Channel, Frame, FrameDecoder, encodeFrame } from '../protocol/FrameCodec';
 
@@ -61,6 +62,7 @@ export class Session {
   private lastCapsH: number = 0;
   private capsTimer: number = -1;
   private readonly onDisplayChange: Callback<number> = (_id: number): void => {
+    hilog.info(0x0, 'SCDIAG', 'display change event');
     // A rotation fires a burst of 'change' events — debounce, then send only if dims changed.
     if (this.capsTimer >= 0) { clearTimeout(this.capsTimer); }
     this.capsTimer = setTimeout((): void => {
@@ -70,7 +72,9 @@ export class Session {
         this.lastCapsW = caps.screenWidth;
         this.lastCapsH = caps.screenHeight;
         this.sendControl({ type: 'caps_update', caps: caps });
-        this.log('caps_update sent ' + caps.screenWidth + '×' + caps.screenHeight);
+        hilog.info(0x0, 'SCDIAG', 'caps_update SENT %{public}dx%{public}d', caps.screenWidth, caps.screenHeight);
+      } else {
+        hilog.info(0x0, 'SCDIAG', 'caps unchanged %{public}dx%{public}d (no send)', caps.screenWidth, caps.screenHeight);
       }
     }, 400);
   };
@@ -180,10 +184,18 @@ export class Session {
     let refresh: number = 60;
     try {
       const d: display.Display = display.getDefaultDisplaySync();
-      sw = d.width;
-      sh = d.height;
+      // Derive the VISUAL (oriented) dims from long/short edge + orientation, so rotation is
+      // detected even on panels where display.width/height don't swap on rotate.
+      const longEdge: number = Math.max(d.width, d.height);
+      const shortEdge: number = Math.min(d.width, d.height);
+      const portrait: boolean =
+        d.orientation === display.Orientation.PORTRAIT || d.orientation === display.Orientation.PORTRAIT_INVERTED;
+      sw = portrait ? shortEdge : longEdge;
+      sh = portrait ? longEdge : shortEdge;
       scale = Math.max(1, Math.round(d.densityPixels));   // integer backing scale (not the raw density)
       refresh = d.refreshRate;
+      hilog.info(0x0, 'SCDIAG', 'localCaps raw=%{public}dx%{public}d orient=%{public}d -> visual=%{public}dx%{public}d',
+                 d.width, d.height, d.orientation, sw, sh);
     } catch (e) {
       this.log('display query failed: ' + JSON.stringify(e));
     }

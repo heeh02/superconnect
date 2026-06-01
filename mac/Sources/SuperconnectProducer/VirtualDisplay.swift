@@ -16,6 +16,10 @@ public struct VirtualDisplayConfig {
     /// When true, create the virtual display as a wide-gamut HDR reference display so
     /// macOS composites HDR content with EDR headroom (instead of tone-mapping to SDR).
     public var hdr: Bool = false
+    /// Per-instance display serial. Rotation recreates the display at the new orientation;
+    /// giving each instance a UNIQUE serial makes macOS treat it as a brand-new display, so it
+    /// extends by default instead of restoring a remembered MIRROR arrangement (#58).
+    public var serial: UInt32 = 1
 
     /// Default ~ a 12.2" tablet at 2560×1600 backing (Huawei MatePad-class):
     /// logical 1280×800 points at 2× → 2560×1600 pixels, HiDPI.
@@ -26,7 +30,8 @@ public struct VirtualDisplayConfig {
                 widthMM: Double = 262.0,
                 heightMM: Double = 164.0,
                 refreshRate: Double = 60,
-                hdr: Bool = false) {
+                hdr: Bool = false,
+                serial: UInt32 = 1) {
         self.name = name
         self.pointWidth = pointWidth
         self.pointHeight = pointHeight
@@ -35,6 +40,7 @@ public struct VirtualDisplayConfig {
         self.heightMM = heightMM
         self.refreshRate = refreshRate
         self.hdr = hdr
+        self.serial = serial
     }
 }
 
@@ -59,7 +65,7 @@ public final class VirtualDisplay {
         descriptor.sizeInMillimeters = CGSize(width: config.widthMM, height: config.heightMM)
         descriptor.productID = 0x0053       // 'S'
         descriptor.vendorID = 0x0043        // 'C'
-        descriptor.serialNum = 0x0001
+        descriptor.serialNum = config.serial
         if config.hdr {
             // BT.2020 primaries + D65 white — wide gamut for an HDR display.
             descriptor.redPrimary   = CGPoint(x: 0.708, y: 0.292)
@@ -84,13 +90,13 @@ public final class VirtualDisplay {
         var rates: [Double] = [config.refreshRate]
         if config.refreshRate > 60 { rates.append(60) }
         rates = Array(Set(rates)).sorted(by: >)
-        settings.modes = rates.map {
-            let m = CGVirtualDisplayMode(width: UInt32(modeWidth),
-                                         height: UInt32(modeHeight),
-                                         refreshRate: $0)
+        // One mode per listed refresh rate, at THIS orientation only. Rotation recreates the display
+        // at the new orientation (an in-place 90° switch is rejected by CoreGraphics), so listing the
+        // swapped orientation here would only let macOS default to the wrong one.
+        settings.modes = rates.map { rate -> CGVirtualDisplayMode in
+            let m = CGVirtualDisplayMode(width: UInt32(modeWidth), height: UInt32(modeHeight), refreshRate: rate)
             if config.hdr {
-                // Per-mode transfer function (private ivar). 16 = SMPTE ST.2084 / PQ
-                // (ITU-T H.273 transfer_characteristics) — marks the mode as HDR.
+                // Per-mode transfer function (private ivar). 16 = SMPTE ST.2084 / PQ → HDR.
                 m.setValue(NSNumber(value: 16), forKey: "transferFunction")
             }
             return m
@@ -143,6 +149,10 @@ public final class VirtualDisplay {
     /// the backing store to points × scale so HiDPI engages correctly.
     public convenience init(_ config: VirtualDisplayConfig = VirtualDisplayConfig()) {
         let scale = max(1, config.scale)
+        // Rotation RECREATES the display per orientation (in-place mode switch is rejected by
+        // CoreGraphics — kCGErrorIllegalArgument — for a 90°-swapped virtual-display mode). So list
+        // ONLY this orientation's modes and size the backing exactly: macOS then brings the display
+        // up in exactly this orientation, no switch needed.
         self.init(explicit: config,
                   modeWidth: config.pointWidth,
                   modeHeight: config.pointHeight,

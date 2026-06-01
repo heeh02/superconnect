@@ -9,6 +9,9 @@
 set -e
 cd "$(dirname "$0")"
 
+DIST=0
+[[ "$1" == "--dist" ]] && DIST=1   # also emit a shareable Superconnect.app.zip
+
 KC="$HOME/Library/Keychains/superconnect-signing.keychain-db"
 KCPASS="superconnect-dev"
 CN="Superconnect Self-Signed"
@@ -45,3 +48,11 @@ codesign --force --deep --sign "$CN" --keychain "$KC" "$APP"
 
 echo "✓ built $APP (signed: $CN)"
 echo "  Grant Screen Recording + Accessibility ONCE; the grant now sticks across rebuilds."
+
+if [[ $DIST == 1 ]]; then
+  echo "▸ packaging shareable zip…"
+  ( cd "$HOME/Desktop" && rm -f Superconnect.app.zip && ditto -c -k --keepParent "Superconnect.app" "Superconnect.app.zip" )
+  echo "✓ $HOME/Desktop/Superconnect.app.zip"
+  echo "  Share this zip. First open on another Mac: right-click the app → 打开 (Open) → 打开,"
+  echo "  or run:  xattr -dr com.apple.quarantine /Applications/Superconnect.app"
+fi

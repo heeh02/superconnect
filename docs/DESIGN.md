@@ -12,7 +12,7 @@
 | Mac OS / 架构 | **macOS 26.5（build 25F71），Apple Silicon arm64** | `sw_vers` / `uname -m` |
 | Xcode SDK | **MacOSX26.4.sdk** 在位 | 研究核验 |
 | 平板 USB 枚举 | `idVendor=0x12D1`(华为) / `USB Vendor Name=HISILICON` / `USB Product Name=HDC Device` | `ioreg -p IOUSB` |
-| 平板形态推断 | **HarmonyOS（极可能是 HarmonyOS NEXT / 纯血鸿蒙）**，已开启开发者模式/USB 调试，正在暴露 **HDC** 接口 | 同上 |
+| 平板形态推断 | **HarmonyOS（HarmonyOS NEXT / 纯血鸿蒙）**，已开启开发者模式/USB 调试，正在暴露 **HDC** 接口 | 同上 |
 | Mac 侧工具 | `hdc`/`adb` **均未安装**（需装 HarmonyOS Command Line Tools / DevEco） | `command -v` |
 | 当前数据链路 | 仅物理连线，**尚无可用数据通道**（未见 USB 网卡/tether 接口） | `networksetup` / `ifconfig` |
 

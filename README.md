@@ -1,93 +1,116 @@
 # Superconnect
 
-把华为平板变成 macOS 的一块**扩展屏**：投屏 + 触控 + M-Pencil 手写笔 + 键盘。
-当前为**有线**（USB）连接，传输层已抽象、为局域网**无线**预留同一套接口；架构按**对称多设备**（任意设备可作主机投出或作从机被投）长期演进。
+把**华为平板**变成 **Mac 的一块扩展屏**：用数据线连上，平板就成了 Mac 的第二块显示器，支持**触控、M-Pencil 手写笔、键盘**。
 
-> 📊 现状快照 → **[`docs/PROJECT-STATUS.md`](docs/PROJECT-STATUS.md)** · 🗺 路线图与待办 → **[`docs/ROADMAP.md`](docs/ROADMAP.md)** · 🏛 架构契约 → **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** · 🔌 线协议 → **[`proto/protocol.md`](proto/protocol.md)** · 🔬 调研 → **[`docs/DESIGN.md`](docs/DESIGN.md)**
+> 当前为**有线（USB）**连接的开发者预览版。平板可作为 Mac 副屏使用；屏幕旋转、手写、键盘、触控手势均已可用。
 
-## 一句话原理
-有线 = **`hdc fport`（TCP over USB）** + 平板内 `TCPSocketServer`；同一套 TCP/协议代码将来直接用于局域网 Wi-Fi——只换"连谁"。
-投屏链路：Mac `CGVirtualDisplay` 造扩展屏 → `ScreenCaptureKit` 采集 → `VideoToolbox` 硬编(HEVC/H.264) → 平板 `OH_VideoDecoder` 解码 → `XComponent` 渲染；输入链路反向回注（`CGEvent`，含笔压感）。
+---
 
-## 能力一览
-| 能力 | 状态 |
+## 它能做什么
+
+- 🖥 **扩展屏**：平板显示 Mac 的桌面（不是镜像，是真正多出来的一块屏），最高 120Hz、HiDPI 清晰显示。
+- ✍️ **M-Pencil 手写**：带压感，在任意 Mac 应用里书写/绘图。
+- 👆 **触控操作**：像触控板一样——单击、拖动、双击（标题栏双击填满窗口）、双指右键、双指滚动、双指捏合缩放。
+- ⌨️ **键盘**：平板的物理键盘 / 虚拟键盘直接给 Mac 打字，**支持中文输入法**。
+- 🔄 **跟随旋转**：转动平板，Mac 这块副屏会自动切换横屏 / 竖屏比例。
+
+---
+
+## 你需要准备
+
+| | 要求 |
 |---|---|
-| 有线扩展屏投屏（120Hz / HEVC / 能力协商 / HiDPI） | ✅ 真机验证 |
-| 物理键盘 + 虚拟键盘（含中文 IME） | ✅ |
-| M-Pencil 压感手写（跨应用，无需 DriverKit） | ✅ |
-| 触控板：光标/单击/右键/滚动/捏合/拖锁 | ✅ 已接通（仍有缺陷，见路线图 P2） |
-| 手指触控（类 iPad 触控板 + 双模式 + 悬浮球） | ✅ |
-| Mac 窗口式 GUI（设备仪表盘 + 菜单栏快捷入口，自动检测，有线/无线标识） | ✅ |
-| 静止画面画质（空闲改 P 帧细化，不再发糊） | ✅ |
-| 小窗启动 + 双击进全屏 + 通知栏退出 | ✅ |
-| 对称多设备（任意设备主/从） | 🧭 架构已预留接缝（Role/ConnectionEngine） |
+| Mac | macOS 14 及以上、Apple Silicon（M 系列）。实测 macOS 26.5。 |
+| 平板 | 华为平板，HarmonyOS NEXT，**已开启开发者模式**。实测 MatePad Pro 13.2。 |
+| 数据线 | 一根能传数据的 USB-C 线（连接 Mac 与平板）。 |
+| 软件 | **DevEco Studio**（华为官方 IDE）。用来把平板端 App 装到平板上，同时它自带的 `hdc` 工具会被 Mac 端自动用来建立连接。 |
 
-## 架构总览
-```
-华为平板 (HarmonyOS, ArkTS + C++ NDK)            Mac (Swift, SwiftPM)
-┌─────────────────────────────────┐            ┌──────────────────────────────────┐
-│ TcpServerTransport (TCP server)  │◀── USB ───▶│ TcpTransport (TCP client)         │
-│   127.0.0.1:8888                 │ hdc fport  │                                   │
-│ Session (CONTROL: hello/ping)    │            │ Session                           │
-│   hello_ack 上报 caps ───────────┼──协商─────▶│ 按 caps 适配:分辨率/刷新率/编解码 │
-│ VIDEO → OH_VideoDecoder → 渲染   │◀──VIDEO────│ CGVirtualDisplay+SCK+VideoToolbox │
-│ 键盘/触控/笔 → InputRouter ──────┼──INPUT────▶│ InputInjector → CGEvent           │
-└─────────────────────────────────┘            └──────────────────────────────────┘
-```
-两端按相同分层组织、**互为镜像**：`models / services(connection·role·discovery) / input / ui / protocol / session / transport`，并各有一个 `AppEnvironment` 组合根选择角色（Receiver/Host）。详见 **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**。
+> 安装分两端：**Mac 端**从 Releases 下载安装包；**平板端**走应用市场（上架审核中）或用 DevEco 自行构建。有线连接还需 `hdc`（见「连接所需的 hdc」）。
 
-## 仓库结构
-```
-superconnect/
-├── docs/                 # ARCHITECTURE(契约) · ROADMAP · PROJECT-STATUS · DESIGN · ...
-├── proto/                # ★ 线协议唯一事实源：protocol.md + vectors.json(黄金向量)
-├── mac/                  # macOS 端 (Swift, SwiftPM)
-│   ├── Sources/SuperconnectCore/      # FrameCodec / InputCodec / Transport / Session
-│   ├── Sources/SuperconnectProducer/  # VirtualDisplay / ScreenCapture / VideoEncoder / Producer / InputInjector
-│   ├── Sources/superconnect-app/      # 窗口式 GUI（MVVM：App/Models/Services/ViewModels/Views）
-│   ├── Sources/superconnect-mac/      # 生产端 CLI（造屏→采集→编码→推流→收 INPUT）
-│   ├── Sources/superconnect-probe/    # 探针（造屏/采集/编码/HDR dump 诊断）
-│   └── Tests/                         # 断言 proto/vectors.json
-├── shared/cpp/           # 可移植 C++ 帧编解码（鸿蒙 NDK 复用）+ 主机测试
-├── harmony/              # 平板端：完整 DevEco 工程 (ArkTS + cpp/)，可直接构建
-└── tools/                # check-device / fport / dev-up / preflight / grant-permissions
-```
+---
 
-## 构建与运行
+## 安装
 
-### 本机即可验证（无需平板）
+### Mac 端（下载安装包）
+
+1. 到 **[Releases](https://github.com/heeh02/superconnect/releases)** 下载最新的 **`Superconnect.dmg`**。
+2. 打开 dmg，把 **Superconnect** 拖进 **应用程序（Applications）**。
+3. **首次打开**：在「应用程序」里**右键 Superconnect → 打开**，再点一次**打开**即可。
+   - 应用是自签名、未经 Apple 公证，所以系统会拦一次；之后就能直接双击打开。
+   - 也可终端一行解除拦截：`xattr -dr com.apple.quarantine /Applications/Superconnect.app`
+4. 首次运行按提示授予 **屏幕录制** + **辅助功能** 两个权限（系统设置 → 隐私与安全性），授权一次即可。
+
+> 想自己从源码构建：`cd mac && ./build-app.sh`（先 `xcode-select --install`）。
+
+### 平板端（华为）
+
+- **普通用户**：在华为**应用市场（AppGallery）**搜索 **Superconnect** 安装——上架审核通过后即可一键安装，无需开发者模式。
+- **开发者 / 抢先体验**：用 **DevEco Studio** 打开 `harmony/` 自行构建安装（需开**开发者模式** + 你自己的华为开发者签名）。步骤见 [`harmony/README.md`](harmony/README.md)。
+
+> 平板端为何不能像 Mac 那样直接下载安装？HarmonyOS 侧载应用必须用开发者身份签名 + 开启开发者模式，是系统硬性限制；面向普通用户的「无感安装」只能走应用市场。
+
+### 连接所需的 `hdc`
+
+有线连接走 USB，**Mac 端需要华为的 `hdc` 工具**来建立通道（应用会自动调用它）。装了 **DevEco Studio** 或 **HarmonyOS 命令行工具** 即自带 `hdc`；平板需开启 **开发者模式 + USB 调试**。
+
+---
+
+## 使用
+
+1. **平板**上打开 Superconnect，让它停在前台（这个 App 本身就是 Mac 的屏幕）。
+2. 用**数据线**连接 Mac 和平板。
+3. **Mac** 上打开 Superconnect，点 **「开始连接」**（它会自动找到平板并建立连接）。
+4. 平板上出现 Mac 桌面 → **双击屏幕进入全屏**。
+5. 把窗口拖到这块副屏上用，或在「系统设置 → 显示器」里调整它的排列位置。
+6. **退出全屏**：从平板顶部下拉**通知栏**，点 Superconnect 的退出。
+
+### 触控 & 手势对照
+
+| 你的操作 | 效果 |
+|---|---|
+| 单指点一下 | 单击 |
+| 单指按住拖动 | 拖动 / 框选 |
+| 单指快速点两下 | 双击（双击窗口标题栏 = 填满屏幕） |
+| 双指点一下 | 右键 |
+| 双指滑动 | 滚动 |
+| 双指捏合 / 张开 | 缩小 / 放大 |
+| M-Pencil | 手写、绘图（带压感） |
+| 键盘打字 | 直接输入到 Mac，支持中文输入法 |
+
+---
+
+## 常见问题
+
+- **Mac 上点「开始连接」找不到平板**：确认平板已开**开发者模式 + USB 调试**、数据线支持传数据、且已安装 DevEco Studio（Mac 端靠它的 `hdc` 连接）。重插一次数据线再试。
+- **投屏后 Mac 自己的屏幕变大、可用空间变少**：已修复——连接时会锁住你内置屏的分辨率，断开后自动还原。若仍出现，断开重连一次。
+- **画面偶尔卡顿 / 连接中断**：USB-HDC 接口偶尔会掉，**重插数据线**即可，Mac 端会自动重连。
+- **双击标题栏没有"填满"**：取决于系统设置 **系统设置 → 桌面与程序坞 → 连按窗口标题栏时** 选了 **"缩放"**（默认就是）。选成"最小化"则会最小化。
+- **平板旋转后比例不对**：本版本旋转时会重建副屏以匹配新方向，稍等约 1 秒即跟随。
+
+---
+
+## 了解原理 / 参与开发
+
+技术细节都在 `docs/`，这里只放使用说明：
+
+- 🏛 架构 → [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · 🗺 路线图 → [`docs/ROADMAP.md`](docs/ROADMAP.md) · 📊 现状 → [`docs/PROJECT-STATUS.md`](docs/PROJECT-STATUS.md)
+- 🔌 线协议 → [`proto/protocol.md`](proto/protocol.md) · 🔬 调研 → [`docs/DESIGN.md`](docs/DESIGN.md) · 📱 平板端说明 → [`harmony/README.md`](harmony/README.md)
+
+一句话原理：Mac 用 `CGVirtualDisplay` 造一块扩展屏 → `ScreenCaptureKit` 采集 → `VideoToolbox` 硬编码 → 经 `hdc fport`（USB 上的 TCP）传给平板 → 平板硬解码并渲染；触控/手写/键盘反向回传，Mac 端转成系统事件注入。同一套传输代码为将来的**局域网无线**和**任意设备互投**预留了接口。
+
+无设备也能验证核心（跨语言协议一致性）：
+
 ```bash
-cd mac && swift test                    # 协议 + INPUT 黄金向量（跨语言一致性）
-cd ../shared/cpp/tests && make test     # C++ 实现与 Swift 逐字节一致
+cd mac && swift test                 # 协议 + 输入编解码黄金向量
+cd ../shared/cpp/tests && make test  # C++ 实现与 Swift 逐字节一致
 ```
 
-### Mac 生产端
-```bash
-cd mac && swift build
-swift run superconnect-mac --produce    # 造扩展屏→采集→编码→推流→收 INPUT 注入
-# 或常驻自愈循环（USB 抖动自动重连）：zsh tools/sc-loop.sh
-```
-权限：投屏需"屏幕录制"、输入注入需"辅助功能"（系统设置 → 隐私与安全性，授予运行的终端）。`tools/grant-permissions.sh` 可引导授予。
-
-### 平板 HAP（HarmonyOS）
-> `harmony/` 是一个**完整的 DevEco Studio 工程**，可直接构建。出于开源安全，**签名配置为空**（`build-profile.json5` 的 `signingConfigs: []`，不含任何证书/密钥/口令）。首次构建：在 DevEco Studio 打开 `harmony/`，`ohpm install` 拉依赖，在 **Project Structure → Signing Configs** 勾选「Automatically generate signature」用你自己的华为开发者身份签名。端到端步骤见 **[`docs/ONDEVICE.md`](docs/ONDEVICE.md)**。
-
-```bash
-# 命令行构建/部署（已配置自动签名后）：
-export JAVA_HOME=/Applications/DevEco-Studio.app/Contents/jbr/Contents/Home
-export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk
-hvigorw --no-daemon assembleHap -p product=default -p buildMode=debug
-hdc install -r entry/build/default/outputs/default/entry-default-signed.hap
-hdc fport tcp:8888 tcp:8888
-hdc shell aa start -a EntryAbility -b <bundleName>
-```
-> 平板需**解锁 + 应用在前台**（应用本身就是 Mac 的屏幕）；USB-HDC 接口偶尔会掉，重插数据线即可，host 循环会自动重连。
-
-## 目标环境（实测）
-macOS 26.5 / Apple Silicon；华为 MatePad Pro 13.2 / HarmonyOS NEXT（USB 枚举为 HiSilicon "HDC Device"，开发者模式已开）。
+---
 
 ## 许可证
+
 [MIT](LICENSE)。
 
 ## 安全
-本仓库不含任何账号凭据或签名私钥；`.gitignore` 已排除签名材料与构建产物。
+
+本仓库不含任何账号凭据或签名私钥；`.gitignore` 已排除签名材料与构建产物。平板端 `build-profile.json5` 的 `signingConfigs` 为空，需用你自己的华为开发者身份签名。
