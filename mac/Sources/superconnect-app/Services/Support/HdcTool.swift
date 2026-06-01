@@ -4,22 +4,28 @@ import Foundation
 /// devices, and open a USB port-forward for a specific device. Used by `WiredDiscovery`
 /// (enumeration) and `HdcFportTunnel` (per-device tunnel).
 enum HdcTool {
-    /// Resolve the hdc binary. On Apple Silicon, prefer the copy bundled inside the app (so the user
-    /// needs NO DevEco install). The bundled hdc is arm64 (from the Apple-Silicon HarmonyOS SDK) — on
-    /// an Intel Mac an arm64 binary CANNOT run (Rosetta only translates x86→arm, not arm→x86), so on
-    /// x86_64 we skip the bundle and fall back to a system hdc (DevEco Studio / HarmonyOS Command Line
-    /// Tools, which are x86_64 on Intel). NOTE: if a UNIVERSAL hdc is ever bundled, drop the arch guard.
+    /// Resolve the hdc binary. Prefer the copy bundled inside the app (so the user needs NO DevEco
+    /// install). Bundled hdc uses a PER-ARCH layout — `hdc/arm64/hdc` and `hdc/x86_64/hdc` — and each
+    /// slice of the universal app binary looks in its OWN arch dir (`#if arch`), because an arm64 hdc
+    /// cannot run on Intel (Rosetta is x86→arm only) and vice-versa. Falls back to the legacy flat
+    /// `hdc/hdc` layout, then to a system hdc (DevEco / HarmonyOS Command Line Tools). If the matching
+    /// arch dir is empty (e.g. no x86_64 hdc bundled yet on an Intel Mac), the system hdc is used.
     static func path() -> String? {
         let fm = FileManager.default
-        #if arch(arm64)
         if let res = Bundle.main.resourceURL {
-            let bundled = res.appendingPathComponent("hdc/hdc").path
-            if fm.isExecutableFile(atPath: bundled) {
-                dequarantineBundledIfNeeded(res.appendingPathComponent("hdc").path)
-                return bundled
+            #if arch(arm64)
+            let archDir = "hdc/arm64"
+            #else
+            let archDir = "hdc/x86_64"
+            #endif
+            for rel in ["\(archDir)/hdc", "hdc/hdc"] {   // per-arch first, then legacy flat layout
+                let bundled = res.appendingPathComponent(rel).path
+                if fm.isExecutableFile(atPath: bundled) {
+                    dequarantineBundledIfNeeded(res.appendingPathComponent("hdc").path)   // whole tree (incl. libusb)
+                    return bundled
+                }
             }
         }
-        #endif
         let candidates = [
             "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc",
             "/Applications/DevEco-Studio.app/Contents/tools/hdc/hdc",

@@ -46,7 +46,9 @@ cp app/Info.plist "$APP/Contents/Info.plist"
 cp app/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"   # constellation icon (matches the tablet)
 
 # Bundle hdc (+ its libusb) so the app is SELF-CONTAINED — the user needs NO DevEco install.
-# hdc's rpath is @loader_path/. so libusb_shared.dylib must sit right next to it.
+# Per-arch layout (Resources/hdc/<arch>/): each slice of the universal app loads hdc from its own
+# arch dir, since an arm64 hdc can't run on Intel and vice-versa. A future x86_64 hdc is a drop-in
+# under hdc/x86_64/. hdc's rpath is @loader_path/. so libusb_shared.dylib sits beside it in each dir.
 HDC_SRC=""
 for d in \
   "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains" \
@@ -55,16 +57,22 @@ for d in \
   [ -x "$d/hdc" ] && { HDC_SRC="$d"; break; }
 done
 if [ -n "$HDC_SRC" ]; then
-  mkdir -p "$APP/Contents/Resources/hdc"
-  cp "$HDC_SRC/hdc" "$APP/Contents/Resources/hdc/"
-  [ -f "$HDC_SRC/libusb_shared.dylib" ] && cp "$HDC_SRC/libusb_shared.dylib" "$APP/Contents/Resources/hdc/"
-  HDC_ARCHS="$(lipo -archs "$APP/Contents/Resources/hdc/hdc" 2>/dev/null || echo '?')"
-  echo "▸ bundled hdc + libusb from $HDC_SRC (archs: $HDC_ARCHS)"
+  HDC_ARCHS="$(lipo -archs "$HDC_SRC/hdc" 2>/dev/null || echo 'arm64')"
+  for arch in arm64 x86_64; do
+    case "$HDC_ARCHS" in
+      *"$arch"*)
+        mkdir -p "$APP/Contents/Resources/hdc/$arch"
+        cp "$HDC_SRC/hdc" "$APP/Contents/Resources/hdc/$arch/"
+        [ -f "$HDC_SRC/libusb_shared.dylib" ] && cp "$HDC_SRC/libusb_shared.dylib" "$APP/Contents/Resources/hdc/$arch/"
+        ;;
+    esac
+  done
+  echo "▸ bundled hdc + libusb from $HDC_SRC (archs: $HDC_ARCHS) → Resources/hdc/<arch>/"
   case "$HDC_ARCHS" in
     *x86_64*) ;;  # universal/Intel hdc → self-contained on Intel too
-    *) echo "   ⚠️  hdc is arm64-only — on INTEL Macs the app runs (universal binary) but falls back to a"
-       echo "       system hdc (DevEco / HarmonyOS Command Line Tools). To make Intel self-contained too,"
-       echo "       drop an x86_64 hdc beside this one and lipo-merge into a universal hdc." ;;
+    *) echo "   ⚠️  bundled hdc is arm64-only — on INTEL Macs the app runs (universal binary) but falls"
+       echo "       back to a system hdc (DevEco / HarmonyOS Command Line Tools). To make Intel"
+       echo "       self-contained, drop an x86_64 (or universal) hdc into Resources/hdc/x86_64/." ;;
   esac
 else
   echo "⚠️  hdc NOT found on this build machine — the app will need DevEco at runtime (not self-contained)"
