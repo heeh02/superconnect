@@ -115,6 +115,18 @@ struct Index {
     this.displayMode = DisplayMode.Fullscreen;
     WindowMode.apply(this.ctx(), DisplayMode.Fullscreen, (m: string): void => { this.appendLog(m); });
     FullscreenNotification.show(this.ctx(), (m: string): void => { this.appendLog(m); });
+    this.refocusIme();   // entering fullscreen mounts the IME catcher — make sure it owns the keyboard
+  }
+
+  // Give keyboard focus back to the hidden IME catcher. defaultFocus(true) only fires on the page's
+  // first focus pass, NOT when the catcher is (re)mounted on entering fullscreen, and the control
+  // panel's buttons/toggles steal focus while open — so we re-request it explicitly. Deferred so it
+  // runs AFTER the current view update (panel unmount / window-mode transition), else focus can
+  // bounce back to a just-removed control. Without this the soft keyboard never pops and
+  // onKeyPreIme never fires (physical keys dead) — the #53 windowed-mode regression. (#kbd-focus)
+  private refocusIme(): void {
+    if (!this.streaming()) { return; }
+    setTimeout((): void => { focusControl.requestFocus('imecatcher'); }, 50);
   }
 
   private exitFullscreen(): void {
@@ -175,6 +187,7 @@ struct Index {
           .opacity(0)
           .width(1)
           .height(1)
+          .onAppear(() => { this.refocusIme(); })   // grab the keyboard the moment we enter fullscreen (#kbd-focus)
           .onKeyPreIme((e: KeyEvent): boolean => {
             return this.kbd?.onKeyPreIme(e) ?? false;   // physical keys → Mac
           })
@@ -248,7 +261,7 @@ struct Index {
           showExitFullscreen: this.fullscreen(),
           onToggleInput: (v: boolean) => { this.setInputDisabled(v); },
           onExitFullscreen: () => { this.exitFullscreen(); },
-          onClose: () => { this.showPanel = false; },
+          onClose: () => { this.showPanel = false; this.refocusIme(); },   // panel buttons stole focus → give it back (#kbd-focus)
         })
       }
     }
@@ -260,6 +273,7 @@ struct Index {
     this.inputDisabled = v;
     // Paused → reveal the tablet's own cursor; capturing → hide it (manager owns the cursor).
     this.manager?.setCaptureEnabled(!v);
+    if (!v) { this.refocusIme(); }   // resuming capture → return keyboard focus to the IME catcher (#kbd-focus)
   }
 
 }

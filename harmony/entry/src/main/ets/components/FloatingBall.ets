@@ -55,6 +55,7 @@ export struct FloatingBall {
     .shadow({ radius: 8, color: '#40000000', offsetX: 0, offsetY: 2 })
     .position({ x: this.ballX, y: this.ballY })
     .zIndex(10)
+    .focusable(false)   // gesture-only; never steal keyboard focus from the hidden IME catcher (#kbd-focus)
     .gesture(
       GestureGroup(GestureMode.Exclusive,
         LongPressGesture({ repeat: false, duration: 450 })
