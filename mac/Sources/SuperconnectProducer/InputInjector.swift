@@ -22,10 +22,8 @@ public final class InputInjector {
     private let boundsLock = NSLock()
     private var cachedBounds: CGRect          // refreshed only on display reconfiguration
     private let source: CGEventSource?
-    private let tabletPointSubtype: Int64 = 1 // kCGEventMouseSubtypeTabletPoint
-    private let tabletProximitySubtype: Int64 = 2 // kCGEventMouseSubtypeTabletProximity
-    private let penDeviceID: Int64 = 0x01
-    private var penInProximity = false
+    private let pen: PenInjector            // pen pressure/tilt + proximity (self-contained)
+    private let keyboard: KeyboardInjector  // raw keys + committed text (self-contained)
 
     // The finger button currently held. The tablet's GestureController owns all
     // tap / drag / right-click discrimination and sends buttons=0 on release; here
@@ -68,6 +66,8 @@ public final class InputInjector {
         self.displayID = displayID
         self.cachedBounds = CGDisplayBounds(displayID)
         self.source = CGEventSource(stateID: .combinedSessionState)
+        self.pen = PenInjector(source: self.source)
+        self.keyboard = KeyboardInjector(source: self.source)
         // Refresh the cached bounds ONLY when displays are reconfigured (monitor
         // plug/unplug, rearrange, resolution change) — not on every event.
         CGDisplayRegisterReconfigurationCallback(InputInjector.reconfigCallback,
@@ -130,62 +130,10 @@ public final class InputInjector {
         let point = globalPoint(e)
         if type == .scroll { postScroll(dx: e.scrollX, dy: e.scrollY); return }
         if type == .zoom { postZoom(e); return }
-        if type == .keyDown || type == .keyUp { injectKey(type == .keyDown, e); return }
+        if type == .keyDown || type == .keyUp { keyboard.injectKey(type == .keyDown, e); return }
         let isPen = e.tool == InputTool.pen.rawValue || e.tool == InputTool.eraser.rawValue
         if e.tool == InputTool.mouse.rawValue { injectMouse(type, e); return }
-        if isPen { injectPen(type, point, e) } else { injectFinger(type, point, e) }
-    }
-
-    // PEN: draw with pressure/tilt. We bracket each stroke with TABLET PROXIMITY
-    // enter/leave events so apps recognize a real pen and actually read pressure.
-    private func injectPen(_ type: InputType, _ point: CGPoint, _ e: InputEvent) {
-        switch type {
-        case .touchDown:
-            enterProximity(point)             // announce a pen entered range → pen mode
-            postPen(.leftMouseDown, point, e)
-        case .touchUp:
-            postPen(.leftMouseUp, point, e)
-            leaveProximity(point)
-        case .touchMove, .hover:
-            if !penInProximity { enterProximity(point) }
-            let down = (e.buttons & InputButtons.primary.rawValue) != 0
-            postPen(down ? .leftMouseDragged : .mouseMoved, point, e)
-        default: break
-        }
-    }
-
-    private func enterProximity(_ point: CGPoint) {
-        if penInProximity { return }
-        penInProximity = true
-        postProximity(true, point)
-    }
-
-    private func leaveProximity(_ point: CGPoint) {
-        if !penInProximity { return }
-        penInProximity = false
-        postProximity(false, point)
-    }
-
-    // A tablet PROXIMITY event tells macOS a stylus device is entering/leaving range
-    // (→ NSEvent .tabletProximity). Most apps gate pressure on having seen this with
-    // pointerType = pen; without it they treat our points as a plain mouse. Needs no
-    // special entitlement — it's a normal synthesized CGEvent.
-    private func postProximity(_ enter: Bool, _ point: CGPoint) {
-        guard let ev = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
-                               mouseCursorPosition: point, mouseButton: .left) else { return }
-        ev.setIntegerValueField(.mouseEventSubtype, value: tabletProximitySubtype)
-        ev.setIntegerValueField(.tabletProximityEventEnterProximity, value: enter ? 1 : 0)
-        ev.setIntegerValueField(.tabletProximityEventPointerType, value: 1) // NX_TABLET_POINTER_PEN
-        ev.setIntegerValueField(.tabletProximityEventDeviceID, value: penDeviceID)
-        ev.setIntegerValueField(.tabletProximityEventVendorID, value: 0x534B) // 'SK'
-        ev.setIntegerValueField(.tabletProximityEventTabletID, value: 1)
-        ev.setIntegerValueField(.tabletProximityEventPointerID, value: 0)
-        ev.setIntegerValueField(.tabletProximityEventSystemTabletID, value: 0)
-        ev.setIntegerValueField(.tabletProximityEventVendorPointerType, value: 0)
-        ev.setIntegerValueField(.tabletProximityEventVendorPointerSerialNumber, value: 1)
-        ev.setIntegerValueField(.tabletProximityEventVendorUniqueID, value: 1)
-        ev.setIntegerValueField(.tabletProximityEventCapabilityMask, value: 0x0000FFFF) // advertise pressure/tilt/etc.
-        ev.post(tap: .cghidEventTap)
+        if isPen { pen.inject(type, point, e) } else { injectFinger(type, point, e) }
     }
 
     // FINGER: direct manipulation. The tablet already classified the gesture and
@@ -229,17 +177,6 @@ public final class InputInjector {
                                mouseCursorPosition: point, mouseButton: button) else { return }
         if clickState > 0 { ev.setIntegerValueField(.mouseEventClickState, value: clickState) }
         ev.post(tap: .cghidEventTap)
-    }
-
-    private func postPen(_ type: CGEventType, _ point: CGPoint, _ e: InputEvent) {
-        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
-                                  mouseCursorPosition: point, mouseButton: .left) else { return }
-        event.setIntegerValueField(.mouseEventSubtype, value: tabletPointSubtype)
-        event.setIntegerValueField(.tabletEventDeviceID, value: penDeviceID) // tie points to the proximity device
-        event.setDoubleValueField(.tabletEventPointPressure, value: Double(normalizePressure(e.pressure)))
-        event.setDoubleValueField(.tabletEventTiltX, value: Double(normalizeTilt(e.tiltX)))
-        event.setDoubleValueField(.tabletEventTiltY, value: Double(normalizeTilt(e.tiltY)))
-        event.post(tap: .cghidEventTap)
     }
 
     // The tablet sends raw vp centroid deltas (NOT normalized — avoids the HiDPI
@@ -364,52 +301,6 @@ public final class InputInjector {
 
     // MARK: - Keyboard
 
-    // Modifier mapping (per the MatePad NearLink keyboard layout):
-    //   tablet Ctrl → macOS Control, tablet Alt → macOS Command (so Alt+C = copy),
-    //   tablet ⊙ (Meta) → macOS Option, Shift → Shift. Fn stays local to the tablet.
-    private func cgFlags(_ f: UInt8) -> CGEventFlags {
-        let m = InputFlags(rawValue: f)
-        var out: CGEventFlags = []
-        if m.contains(.shift)   { out.insert(.maskShift) }
-        if m.contains(.control) { out.insert(.maskControl) }
-        if m.contains(.alt)     { out.insert(.maskCommand) }
-        if m.contains(.meta)    { out.insert(.maskAlternate) }
-        return out
-    }
-
-    // RAW key (shortcuts + named/navigation keys). keyCode = HarmonyOS code; modifiers
-    // folded into `flags` on BOTH down and up so a dropped event can't stick a modifier.
-    private func injectKey(_ down: Bool, _ e: InputEvent) {
-        guard let vk = KeyMap.mac(e.keyCode) else { return } // unmapped → ignore (text path covers printables)
-        guard let ev = CGEvent(keyboardEventSource: source, virtualKey: vk, keyDown: down) else { return }
-        ev.flags = cgFlags(e.flags)
-        ev.post(tap: .cghidEventTap)
-    }
-
     // COMMITTED text (Chinese IME + any typed Unicode), from CONTROL {"type":"text"}.
-    // Types the string verbatim via the Unicode payload — no keycode, no modifiers.
-    public func injectText(_ s: String) {
-        guard !s.isEmpty else { return }
-        let utf16 = Array(s.utf16)
-        guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
-              let up   = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else { return }
-        utf16.withUnsafeBufferPointer { buf in
-            down.keyboardSetUnicodeString(stringLength: buf.count, unicodeString: buf.baseAddress)
-            up.keyboardSetUnicodeString(stringLength: buf.count, unicodeString: buf.baseAddress)
-        }
-        down.flags = []; up.flags = [] // text must carry NO modifiers, else 'c' → Cmd+C
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
-    }
-
-    private func normalizePressure(_ p: Float) -> Float {
-        guard p.isFinite else { return 0 }
-        if p > 1.5 { return min(1, p / 65535) }
-        return min(1, max(0, p))
-    }
-
-    private func normalizeTilt(_ t: Float) -> Float {
-        guard t.isFinite else { return 0 }
-        return max(-1, min(1, t / 90))
-    }
+    public func injectText(_ s: String) { keyboard.injectText(s) }
 }
