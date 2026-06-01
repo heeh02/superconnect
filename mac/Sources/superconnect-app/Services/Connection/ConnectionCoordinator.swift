@@ -119,4 +119,10 @@ final class ConnectionCoordinator: ObservableObject {
     func disconnectAll() {
         for id in Array(conns.keys) { disconnect(deviceID: id) }
     }
+
+    /// Apply a bitrate (Mbps) to every live engine — the global bitrate setting fans out to all
+    /// connected tablets (and seeds a just-connecting one, whose engine reads it at producer build).
+    func applyBitrate(_ mbps: Int) {
+        for mc in conns.values { mc.engine.setBitrate(mbps) }
+    }
 }

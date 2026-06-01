@@ -18,7 +18,7 @@ public final class Producer {
     private let capture: ScreenCapture
     private var encoder: VideoEncoder?
     private let fps: Int
-    private let bitrate: Int
+    private var bitrate: Int
     private let codec: VideoCodec
     private let hdr: Bool
 
@@ -116,6 +116,15 @@ public final class Producer {
         encodeQueue.sync { }      // drain any in-flight submit
         encoder?.stop()
         encoder = nil
+    }
+
+    /// Retune the live stream. Serialized on encodeQueue with submit/heartbeat; safe before the
+    /// encoder exists (the updated value is used when the lazy encoder is built in submit()).
+    public func setBitrate(_ bps: Int) {
+        encodeQueue.async {
+            self.bitrate = bps
+            self.encoder?.setBitrate(bps)
+        }
     }
 
     private static func now() -> UInt64 { DispatchTime.now().uptimeNanoseconds }

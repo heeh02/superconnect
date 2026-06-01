@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Optional, collapsed-by-default disclosure — the ONLY place technical stats appear.
-/// Reads telemetry; never referenced by the main flow.
+/// Optional, collapsed-by-default disclosure — the read-only live stream stats, shown only while
+/// connected. The bitrate *control* lives in the always-visible 「画质」 box (DeviceDetailView); this
+/// just reports the bitrate the stream is actually using.
 struct AdvancedPanel: View {
     let telemetry: SessionTelemetry
 
@@ -11,6 +12,7 @@ struct AdvancedPanel: View {
                 row("分辨率", telemetry.resolution)
                 row("编码", telemetry.codec)
                 row("帧率", telemetry.fps > 0 ? "\(telemetry.fps) fps" : "—")
+                row("码率", telemetry.bitrateMbps > 0 ? "\(telemetry.bitrateMbps) Mbps" : "—")
             }
             .padding(.top, 4)
         }

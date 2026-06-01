@@ -17,6 +17,23 @@ struct DeviceDetailView: View {
                 header
                 ConnectionToggle(vm: vm, device: device)
 
+                // 画质 / 码率 — always visible so it can be set before connecting; persists + retunes
+                // a live stream immediately, or applies on the next connect.
+                GroupBox("画质") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("码率").foregroundStyle(.secondary)
+                            Spacer()
+                            Text("\(Int(vm.bitrateMbps)) Mbps")
+                        }
+                        Slider(value: $vm.bitrateMbps, in: 10...100, step: 5)
+                        Text("越高越清晰、越占带宽。连接时拖动实时生效；未连接时的设置会在连接后应用。")
+                            .font(.caption).foregroundStyle(.tertiary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                }
+
                 if isThisConnected, let t = deviceTelemetry {
                     GroupBox("画面") { AdvancedPanel(telemetry: t).padding(6) }
                 }
@@ -40,7 +57,7 @@ struct DeviceDetailView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         infoRow("传输", device.transport == .wired ? "有线 (USB)" : "无线")
                         infoRow("画面", deviceTelemetry.map { "\($0.resolution) · \($0.codec.uppercased())" } ?? "连接后显示")
-                        Text("分辨率 / 刷新率 / 编码 / 码率由 Mac 与平板自动协商。")
+                        Text("分辨率 / 刷新率 / 编码由 Mac 与平板自动协商；码率可在「高级信息」中实时调节。")
                             .font(.caption).foregroundStyle(.tertiary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

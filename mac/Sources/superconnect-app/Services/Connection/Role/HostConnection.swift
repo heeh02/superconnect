@@ -15,7 +15,7 @@ final class HostConnection: ConnectionEngine {
     var statePublisher: AnyPublisher<ConnectionState, Never> { stateSubject.eraseToAnyPublisher() }
     var telemetryPublisher: AnyPublisher<SessionTelemetry, Never>? { telemetrySubject.eraseToAnyPublisher() }
 
-    private let bitrateMbps = 50
+    private var bitrateMbps = 50
     private let maxFps = 120
 
     private var host = "127.0.0.1"
@@ -74,6 +74,16 @@ final class HostConnection: ConnectionEngine {
             t?.stop()
         }
         stateSubject.send(.idle)
+    }
+
+    /// Live bitrate change (clamped 10–100 Mbps). Retunes the running encoder immediately AND is read
+    /// by the next buildProducer, so a reconnect/rotation re-applies it. Satisfies `ConnectionEngine`.
+    func setBitrate(_ mbps: Int) {
+        let m = max(10, min(100, mbps))
+        bitrateMbps = m
+        tele.bitrateMbps = m
+        telemetrySubject.send(tele)
+        producer?.setBitrate(m * 1_000_000)
     }
 
     // MARK: - Session lifecycle (generation-guarded retry)

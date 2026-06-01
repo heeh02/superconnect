@@ -20,6 +20,21 @@ final class AppViewModel: ObservableObject {
     /// performance, but connecting is never blocked (a perf-limited Mac runs N encode pipelines — #51).
     let softCap = 2
 
+    /// Global encode bitrate (Mbps, 10–100), persisted across launches. Changing it retunes every
+    /// live link immediately (the coordinator fans it out to all engines). The single user-adjustable
+    /// encode setting; fps/codec stay caps-negotiated.
+    @Published var bitrateMbps: Double = AppViewModel.loadBitrate() {
+        didSet {
+            UserDefaults.standard.set(bitrateMbps, forKey: AppViewModel.bitrateKey)
+            coordinator.applyBitrate(Int(bitrateMbps))
+        }
+    }
+    private static let bitrateKey = "sc.bitrateMbps"
+    private static func loadBitrate() -> Double {
+        let v = UserDefaults.standard.double(forKey: bitrateKey)
+        return (v >= 10 && v <= 100) ? v : 50
+    }
+
     private let store: DeviceStore
     private let coordinator: ConnectionCoordinator
     private var bag = Set<AnyCancellable>()
@@ -87,6 +102,7 @@ final class AppViewModel: ObservableObject {
             coordinator.disconnect(deviceID: device.id)
         } else {
             coordinator.connect(device, as: .host)
+            coordinator.applyBitrate(Int(bitrateMbps))   // seed the new link with the current global bitrate
         }
     }
 

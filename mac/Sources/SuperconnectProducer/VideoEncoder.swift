@@ -17,7 +17,7 @@ public final class VideoEncoder {
     private let width: Int32
     private let height: Int32
     private let fps: Int32
-    private let bitrate: Int32
+    private var bitrate: Int32
     private let codec: VideoCodec
     private let hdr: Bool                 // HEVC Main10 + BT.2020/PQ when true
     private var session: VTCompressionSession?
@@ -103,6 +103,16 @@ public final class VideoEncoder {
             VTCompressionSessionInvalidate(session)
         }
         session = nil
+    }
+
+    /// Live bitrate change (AverageBitRate is a dynamic property — no session rebuild). MUST be
+    /// called on the owning queue (Producer.encodeQueue) that creates `session` and runs encode().
+    /// If the session isn't started yet, the stored value is applied in start().
+    public func setBitrate(_ bps: Int) {
+        bitrate = Int32(bps)
+        guard let session else { return }
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate,
+                             value: NSNumber(value: bitrate))
     }
 
     // MARK: - AVCC/HVCC → Annex-B
