@@ -109,7 +109,7 @@ hdc -v && tools/check-device.sh   # 应列出设备，而非 [Empty]
    (produce) connecting to 127.0.0.1:8888 …
    handshake OK. peer caps: [...]
    virtual display <id> at (...)
-   encoding 1280×800 → sending video_config
+   encoding <W>×<H> → sending video_config
    streaming ~N fps
    ```
 
@@ -143,7 +143,7 @@ hdc -v && tools/check-device.sh   # 应列出设备，而非 [Empty]
 | Surface 加载但原生回调不触发 | `libraryname`/`nm_modname`/.so 基名不一致，或未编译原生 | 三者都为 `superconnect`；确认 `externalNativeOptions.path`，检查产物 `.../libs/arm64-v8a/libsuperconnect.so` |
 | `hdc install` 报签名错误 | 未签名 / profile 不含设备 UDID | 连着设备开自动签名（或在 AGC 注册 UDID），重建后 `hdc install -r` |
 | CMake 找不到 `OH_VideoDecoder` 符号 | SDK API < 12 或未装 NDK | SDK Manager 装 API≥12 + Native；调高 `compileSdkVersion` |
-| 平板背景后断流 | NEXT 冻结后台 app | 保持 app 前台；用 `window.setWindowKeepScreenOn(true)` 防息屏（Phase 1 待加） |
+| 平板背景后断流 | NEXT 冻结后台 app | 保持 app 前台；当前已在 `EntryAbility` 调用 `setWindowKeepScreenOn(true)` 防息屏，但后台冻结仍由系统策略决定 |
 
 **macOS / hdc**
 | 现象 | 原因 | 处理 |
@@ -157,7 +157,7 @@ hdc -v && tools/check-device.sh   # 应列出设备，而非 [Empty]
 
 ---
 
-## 8. 已知后续（不影响联调，列出以免踩坑）
-- 投屏分辨率当前为 1280×800（虚拟屏背景分辨率），HiDPI 2× 背景待校准（Phase 3）。
-- 防息屏 `setWindowKeepScreenOn(true)` 待加（保持前台时屏幕会自动变暗）。
+## 8. 当前联调边界（不影响主流程）
+- 分辨率 / 刷新率 / 编码器由平板 `hello_ack` caps 与 Mac host 动态协商；当前路径已支持 HiDPI、HEVC/H.264、120Hz 与旋转后的重协商。
+- 平板端已实现小窗预览、双击进全屏、通知栏退出和 `setWindowKeepScreenOn(true)`；仍需保持 App 在前台，后台冻结属于 HarmonyOS 系统策略。
 - ArkTS 严格模式可能对 `@ohos.net.socket` 类型名/动态 JSON 提示告警——按你 SDK 的 `.d.ts` 微调，协议字节序由 `proto/vectors.json` 保证不变。

@@ -15,10 +15,14 @@ cpp/
 ## Flow
 1. ArkTS `XComponent({ type: SURFACE, libraryname: 'superconnect' })` → on surface
    create, `napi_init.cpp` binds the `OHNativeWindow` to the decoder.
-2. ArkTS `Session` routes VIDEO-channel frames to `sc.pushVideo(arraybuffer, isKeyframe)`.
+2. ArkTS `Session` routes VIDEO-channel frames to `sc.pushVideo(arraybuffer, isKeyframe)`;
+   `video_config` selects codec / HDR mode and calls `setVideoSize()`.
 3. `VideoDecoder` feeds Annex-B access units to `OH_VideoDecoder` and renders each
    decoded frame straight to the surface via `OH_VideoDecoder_RenderOutputBuffer`
    (zero-copy, late frames dropped).
+4. Input capture is implemented in ArkTS (`input/InputRouter.ets`, `KeyboardHandler.ets`,
+   `GestureController.ets`) and sent through the shared `FrameInputSender`; the native module
+   only owns decode/render today.
 
 ## Enabling the native build in DevEco
 The committed files are the **sources**; DevEco owns the build wiring. Easiest:
@@ -32,13 +36,14 @@ The committed files are the **sources**; DevEco owns the build wiring. Easiest:
    `"dependencies": { "libsuperconnect.so": "file:./src/main/cpp/types/libsuperconnect" }`.
 3. Build & run.
 
-## Phase 2 hook
-`DispatchTouchEvent` in `napi_init.cpp` is where pen/touch capture will live
-(`ui_input_event.h`: `GetToolType==PEN`, pressure/tilt, `GetHistory*`) → INPUT channel.
+## Input path
+`DispatchTouchEvent` in `napi_init.cpp` is intentionally unused in the current app. The shipped
+receiver captures pen, touch, trackpad, and keyboard events in ArkTS because ArkUI now exposes the
+needed pressure / tilt / historical-point data directly, and that path is already wired to the
+INPUT channel.
 
 ## To verify on device
 - HEVC: add `OH_AVCODEC_MIMETYPE_VIDEO_HEVC` path + capability check (`OH_AVCapability`).
 - Confirm the decoder accepts a full access unit (SPS/PPS+IDR) per `OH_AVBuffer`,
   and that `OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY` is honored on the target SoC.
-- Drive `setVideoSize()` from the negotiated handshake resolution rather than a
-  hard-coded 2560×1600 (see protocol hello caps).
+- Confirm `video_config` re-arms the decoder when rotation or resolution changes.

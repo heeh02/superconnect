@@ -1,4 +1,4 @@
-# Superconnect — 工作总结(截至 2026-05-31)
+# Superconnect — 工作总结(截至 2026-06-01)
 
 把华为 MatePad Pro 13.2 当作 macOS 的**有线扩展屏**:投屏 + 触控 + M-Pencil 压感笔记。
 传输走 USB(`hdc fport` 的 TCP),为将来无线(局域网)预留了同一套传输接口。
@@ -18,8 +18,10 @@
 | 拖影修复 | ✅ | 解码器积压时"丢到下一个关键帧"(TCP 无丢包,真正诱因是积压而非丢包)+ 1s 关键帧间隔 |
 | 全屏 | ✅ | `setWindowLayoutFullScreen(true)` + 隐藏系统栏 |
 | 设置里显示刷新率 | ✅ | 虚拟屏列出 120/60 两档模式 + `forceMode` 钉到原生率,System Settings 才会显示刷新率选择器 |
-| **手指触控(类 iPad 触控板)** | ✅ | 见第 3 节 |
+| **手指触控 / 触控板(类 iPad 触控板)** | ✅ | 见第 3 节；主路径与标题栏 / 侧边栏全屏类交互均已接通 |
 | **悬浮球切换模式** | ✅ | 应用内可拖动悬浮球,点按切换桌面/绘画模式,边缘吸附 |
+| **小窗预览 / 双击全屏 / 通知栏退出** | ✅ | 连接后先小窗预览,双击画面进入沉浸全屏,通知栏动作回到小窗 |
+| **多机并存(Layer A)** | ✅ | Mac 端按 `deviceID` 管理多条独立连接;每台平板独立虚拟屏/隧道/状态/遥测,线协议不变 |
 | **M-Pencil 压感** | ✅ | 见第 4 节(关键:tablet **proximity** 事件) |
 | 防误触 | ✅ | 笔接触期间(+抬笔 0.6s 内)屏蔽手指 |
 
@@ -60,7 +62,7 @@
 | 手写笔 | 画(带压感) | 画(带压感) |
 
 - **悬浮球**:应用内 56vp 圆球(最上层 `zIndex`,不抢画布触摸),点按切换 `isDrawingMode`,可拖动 + 边缘吸附。无需系统悬浮窗权限。
-- **核心理念**:**笔负责画,手指负责操作界面**(类 iPad + Apple Pencil)。
+- **核心理念**:**笔负责画,手指负责操作界面**(类 iPad + Apple Pencil)。当前触控与触控板主路径已经覆盖常见 Mac UI 操作,包括标题栏 / 侧边栏触发的全屏或填满窗口类交互。
 
 ---
 
@@ -135,6 +137,7 @@ HDC=/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/
 
 - **悬浮球响应区是 56×56 方形**(可见圆形四角外一点点也会响应);靠边停靠时影响很小,低优先级,需要可改成纯圆形。
 - **压感曲线**:M-Pencil 经 ArkUI 的压感值偏窄(日志约 0.07~0.58),如需更强的轻↔重对比可加一条 gamma 拉伸(已确认目前手感够用,暂不做)。
+- **触控/触控板**:功能主路径已完成;后续仅保留设备/手感层面的调参与真机观察项,不再列为功能缺口。
 - **无线(Phase 4)**:传输层已抽象,改 `0.0.0.0` 监听 + mDNS 发现即可走局域网,代码主体复用。
 - **DriverKit 真数位板**:已搁置——proximity 方案已让压感跨应用生效,无需付费账号;若将来要做专业级(更高精度/被所有 pro app 原生识别),仍可走 DriverKit(需付费 Apple 账号 + entitlement 审批),设计见 `docs/PRESSURE-DRIVERKIT.md`。
 
@@ -152,11 +155,11 @@ HDC=/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/
 
 ## 10. 本阶段(2026-05-31)做了什么 —— 可维护性升级 + GUI + 现状梳理
 
-1. **Mac 端窗口式 GUI(MVVM)** —— 独立窗口设备仪表盘(侧栏设备 + 右侧详情/连接/权限) + 菜单栏快捷入口;设备为中心、自动检测、右下角有线/无线标识,UI 与逻辑分离,预留对称多设备接口。
+1. **Mac 端窗口式 GUI(MVVM)** —— 独立窗口设备仪表盘(侧栏设备 + 右侧详情/连接/权限) + 菜单栏快捷入口;设备为中心、自动检测、右下角有线/无线标识,UI 与逻辑分离;当前已按设备独立连接/断开,支持多台平板并存。
 2. **平板端代码仓库可维护性升级** —— 单体 `Index.ets`(740→210 行)拆分,建立与 Mac **镜像的分层**:`models/`(Role/ConnectionStatus/StreamInfo/Peer)、`services/`(ConnectionManager)、`services/connection/`(ConnectionEngine + TunnelService + role/{Receiver,Host}Connection)、`services/discovery/`、`input/`、`ui/`、`protocol/`、`session/`、`transport/`,加 `app/AppEnvironment` 组合根。
-3. **角色接缝(对称多设备前置)** —— `ConnectionEngine` 接口 + `Role`(Receiver/Host)。平板 `ReceiverConnection` 为真实角色、`HostConnection` 为桩(与 Mac 一真一桩对称镜像)。启用"平板投出"对称未来 = 改 `AppEnvironment.engineForRole` 一行。
+3. **角色接缝 + 多会话注册表** —— `ConnectionEngine` 接口 + `Role`(Receiver/Host)。平板 `ReceiverConnection` 为真实角色、`HostConnection` 为桩(与 Mac 一真一桩对称镜像)。Mac 连接生命周期已从单连接升级为 `[deviceID: ManagedConnection]` 注册表,多台平板可同时作为副屏;启用"平板投出"对称未来 = 实现桩并改 `AppEnvironment.engineForRole`。
 4. **统一状态模型** —— 页面改用 `ConnectionStatus` 枚举(替代裸字符串),空闲界面显示干净文案(等待 Mac 连接 / 已连接)。
 5. **HDR 调研与决策** —— 完整建好 HDR 编/采/解链路(平板已验证可解 10-bit),但**私有 `CGVirtualDisplay` 无法让系统报告 EDR>1.0**,虚拟屏 HDR 暂不可行 → **接受 SDR**,HDR 代码保留并在协商处关闭。
-6. **统一应用图标** —— 星座/GH 图标(仅存在于 DevEco 工程,仓库待补,见 ROADMAP §4)。
-7. **现状梳理(本轮无代码改动)** —— 物理/虚拟键盘**收尾**;触控板仍有缺陷(P2);触控部分功能未实现如双击侧边栏进全屏(P2);**定位"静止画面缓存帧导致画质下降"根因**(ABR + ExpectedFrameRate 钳制空闲关键帧预算)并给出修复方案(P1,见 ROADMAP §2);记录"小窗启动 + 双击进全屏 + 通知栏退出"新需求(P1)。
-8. **开源就绪** —— `git init` + `.gitignore`(排除构建产物/签名/`oh_modules`/会话数据);确认仓库不含测试账号或私钥;待补 `LICENSE` 与 harmony 工程脚手架(见 ROADMAP §4)。
+6. **统一应用图标** —— 星座/GH 图标已进入 Mac app 与 HarmonyOS 工程资源。
+7. **现状梳理** —— 物理/虚拟键盘**收尾**;触控/触控板主路径已覆盖移动、单击、右键、滚动、捏合、拖锁、双击和标题栏 / 侧边栏全屏类交互;**静止画面缓存帧导致画质下降**与**小窗启动 + 双击进全屏 + 通知栏退出**均已实现修复/收尾(见 ROADMAP §2)。
+8. **开源就绪** —— `git init` + `.gitignore`(排除构建产物/签名/`oh_modules`/会话数据);确认仓库不含测试账号或私钥;已补 MIT `LICENSE`, `harmony/` 为完整 DevEco 工程且签名配置为空。

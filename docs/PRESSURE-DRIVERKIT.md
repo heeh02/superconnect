@@ -1,10 +1,13 @@
-# 真实压感路线图：DriverKit 虚拟数字化板（Phase 3b）
+# DriverKit 虚拟数字化板（远期专业路线）
 
-> 现状：平板已能采集 M-Pencil 的 **压感(0–1) + 倾角**，并区分笔/手指；Mac 端笔走 `CGEvent` 的 tablet 子类型注入。
-> 问题：**Notability/Procreate 类专业 app 通常只认"真实 HID 数字化板"的压感**，会忽略合成的 `CGEvent` 压力 → 线宽不随力度变化。
-> 解法：在 Mac 上用 **DriverKit 系统扩展(dext)** 注册一个**虚拟数字化板 HID 设备**，让 macOS 自己生成真正的 `NSTabletPoint` 压感事件，专业 app 即原生识别。（即 Astropad 的做法。）
+> 当前 v0 已不依赖 DriverKit：平板通过 ArkUI 采集 M-Pencil **压感(0–1) + 倾角**，
+> Mac 端用 `CGEvent` tablet point 并补齐 tablet **proximity** enter/leave 事件后，
+> 已能让主流绘写应用进入手写笔模式并读取压力。DriverKit 因此不是当前必需项。
+>
+> 本文保留为远期专业路线：如果将来需要更高精度、系统级虚拟数位板身份，或某些专业 app
+> 对合成 tablet event 仍不兼容，可再实现 DriverKit 虚拟 HID 数字化板。
 
-## 要做什么
+## 若将来要做什么
 1. **DriverKit dext**（C++，`IOUserHIDDevice` 子类）：
    - 提供一个 HID Report Descriptor，使用 **Digitizer/Stylus（usage page 0x0D）**：X、Y、Tip Pressure、In-Range(proximity)、Tilt X/Y、Eraser。
    - 接收来自宿主 app 的笔数据，组装 HID input report 上报。
@@ -25,6 +28,6 @@
 - 中-大型，且关键路径依赖 **Apple 审批 + 你的账号能力 + GUI 签名/批准**，无法纯 CLI 自动完成。
 - 建议在你准备好（账号开通 DriverKit 能力）后，作为一个独立里程碑推进；届时我可：搭好 Xcode 工程骨架、写 dext + report descriptor + 宿主激活 + InputInjector 路由，你负责账号/签名/系统批准。
 
-## 不上 DriverKit 的替代
-- 现有 `CGEvent` tablet 子类型：部分 app 可能认压感（值得逐个实测）。
-- 也可做一个**自绘画布**（平板或 Mac 端我们自己渲染笔迹，压感随便用），但那就不是"在任意 Mac app 里用笔"了。
+## 当前替代方案
+- 现有路径：ArkUI pressure/tilt/history → INPUT → `CGEvent` tablet point + tablet proximity。当前项目以此为 v0 的真实压感方案。
+- 可选调优：如需更强轻重对比，可在 Mac 注入前对 pressure 做 gamma 曲线拉伸。

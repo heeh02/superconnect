@@ -112,11 +112,12 @@ tiltX:f32 | tiltY:f32   // 手写笔倾角，度 [-90,90]
 scrollX:f32 | scrollY:f32
 keyCode:u16 | pointerId:u16
 ```
-- `type`: 0=touchDown 1=touchMove 2=touchUp 3=hover 4=keyDown 5=keyUp 6=scroll
+- `type`: 0=touchDown 1=touchMove 2=touchUp 3=hover 4=keyDown 5=keyUp 6=scroll 7=zoom
 - `tool`: 0=finger 1=pen 2=eraser 3=mouse
 - `buttons`: 位掩码（bit0=主键/左键，bit1=次键）
 - `pointerId`: 多点触控指针标识（v2 起；原 `reserved`，旧端写 `0`，字节布局不变、向后兼容）。
 - 坐标归一化；Mac 侧映射到虚拟屏全局像素坐标后注入。**笔(tool=pen)** 携带 `pressure`/`tiltX`/`tiltY`，Mac 用 `CGEvent` 的 tablet 子类型注入压感（专业 app 后续走 DriverKit 虚拟数字化板）。
+- `zoom` 事件用于捏合缩放：`buttons` 表示手势阶段（1=began、0=changed、2=ended），`scrollY` 携带每帧 magnification delta；`x/y` 可携带触摸锚点，触控板路径可置 0 表示在当前光标处缩放。
 - Phase 3 后续可在 `flags` 标记"含历史采样点"，记录后追加高频采样数组（`GetHistory*`）。
 
 ## 6. VIDEO 通道（Phase 1，已实现）
