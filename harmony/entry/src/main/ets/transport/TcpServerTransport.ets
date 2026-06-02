@@ -12,10 +12,26 @@ import util from '@ohos.util';
 import { Session } from '../session/Session';
 import { Channel, encodeFrame } from '../protocol/FrameCodec';
 
+/**
+ * The transport's OWN connection-lifecycle vocabulary, mapped 1:1 by the receiver to the UI's
+ * ConnectionStatus. TYPED (not free-form strings) on purpose: a stringly-typed status channel let a
+ * transport-internal event mis-map into the UI's display/input gating (rejecting a surplus client
+ * emitted a Chinese string that fell through to ConnectionStatus.Idle, which dropped the page out of
+ * fullscreen and disabled keyboard + touch). With an enum, only these deliberate transitions exist,
+ * and a surplus-client rejection emits NOTHING — it never changes the PRIMARY session's status.
+ * See docs/CONFLICTS.md.
+ */
+export enum ServerStatus {
+  Listening,
+  Connected,
+  ClientGone,
+  ListenFailed,
+}
+
 export class TcpServerTransport {
   private server: socket.TCPSocketServer = socket.constructTCPSocketServerInstance();
   private log: (s: string) => void;
-  private onStatus: (s: string) => void;
+  private onStatus: (s: ServerStatus) => void;
   private onVideo: ((payload: Uint8Array, isKeyframe: boolean) => void) | null;
   private onVideoConfig: ((width: number, height: number, codec: string, hdr: string) => void) | null;
   // Wireless TOFU gate (null ⇒ wired/no gate). Installed onto each Session so an unknown LAN client
@@ -36,7 +52,7 @@ export class TcpServerTransport {
   onClientGone: ((ownerId: number) => void) | null = null;
 
   constructor(log: (s: string) => void,
-              onStatus: (s: string) => void,
+              onStatus: (s: ServerStatus) => void,
               onVideo: ((payload: Uint8Array, isKeyframe: boolean) => void) | null = null,
               onVideoConfig: ((width: number, height: number, codec: string, hdr: string) => void) | null = null,
               pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string) => Promise<boolean>) | null = null) {
@@ -94,7 +110,7 @@ export class TcpServerTransport {
 
   private tryListen(bindAddress: string, ports: number[], i: number): void {
     if (i >= ports.length) {
-      this.onStatus('listen failed');
+      this.onStatus(ServerStatus.ListenFailed);
       this.log('listen failed: no free port in ' + ports[0] + '..' + ports[ports.length - 1]);
       return;
     }
@@ -103,7 +119,7 @@ export class TcpServerTransport {
     const addr: socket.NetAddress = { address: bindAddress, port: port, family: 1 };
     this.server.listen(addr).then((): void => {
       this.boundPort = port;
-      this.onStatus('listening ' + bindAddress + ':' + port);
+      this.onStatus(ServerStatus.Listening);
       this.log('TCP server listening on ' + bindAddress + ':' + port);
       this.attachConnectHandler();
       if (this.onListening !== null) { this.onListening(bindAddress, port); }
@@ -126,11 +142,13 @@ export class TcpServerTransport {
       // error so the Mac fails fast (no reconnect-loop) instead of treating a silent close as a drop.
       if (this.currentClientId !== -1) {
         this.log('rejecting 2nd client id=' + client.clientId + ' — single active session (incumbent=' + this.currentClientId + ')');
-        this.onStatus('已拒绝第二个连接（同一时间仅支持一条连接）');
+        // Deliberately emit NO status: rejecting a surplus client does NOT change the PRIMARY session's
+        // state. Emitting one here previously mis-mapped to ConnectionStatus.Idle and dropped the page
+        // out of fullscreen, disabling keyboard + touch on the live session. (see docs/CONFLICTS.md)
         this.rejectBusy(client);
         return;
       }
-      this.onStatus('client connected');
+      this.onStatus(ServerStatus.Connected);
       this.log('client connected (id=' + client.clientId + ')');
 
       const sendFn = (bytes: Uint8Array): void => {
@@ -168,7 +186,7 @@ export class TcpServerTransport {
         session.onBytes(new Uint8Array(value.message));
       });
       client.on('close', (): void => {
-        this.onStatus('client disconnected');
+        this.onStatus(ServerStatus.ClientGone);
         // If this client owned an in-flight pairing prompt, free it (dialog clears, no late trust).
         // Keyed on the transport-assigned clientId so only THIS connection can cancel its prompt.
         if (this.onClientGone !== null) { this.onClientGone(client.clientId); }

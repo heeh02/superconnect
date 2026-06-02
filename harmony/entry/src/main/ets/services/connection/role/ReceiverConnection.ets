@@ -1,7 +1,7 @@
 import { ConnectionEngine } from '../ConnectionEngine';
 import { ConnectionStatus } from '../../../models/ConnectionStatus';
 import { StreamInfo } from '../../../models/StreamInfo';
-import { TcpServerTransport } from '../../../transport/TcpServerTransport';
+import { TcpServerTransport, ServerStatus } from '../../../transport/TcpServerTransport';
 import sc from 'libsuperconnect.so';
 
 // ReceiverConnection — the tablet's REAL role: receive a screen stream and display it
@@ -42,7 +42,7 @@ export class ReceiverConnection implements ConnectionEngine {
   start(): void {
     this.transport = new TcpServerTransport(
       (msg: string): void => { this.onLog?.(msg); },
-      (s: string): void => { this.onStatus?.(this.mapStatus(s)); },
+      (s: ServerStatus): void => { this.onStatus?.(this.mapServerStatus(s)); },
       // VIDEO channel → native decoder (renders onto the XComponent surface).
       (payload: Uint8Array, isKeyframe: boolean): void => {
         sc.pushVideo(payload, isKeyframe);
@@ -99,11 +99,17 @@ export class ReceiverConnection implements ConnectionEngine {
     return (b: Uint8Array): void => { this.transport?.sendFrame(b); };
   }
 
-  private mapStatus(s: string): ConnectionStatus {
-    if (s.indexOf('disconnect') >= 0) { return ConnectionStatus.Listening; }
-    if (s.indexOf('connect') >= 0) { return ConnectionStatus.Connected; }
-    if (s.indexOf('fail') >= 0) { return ConnectionStatus.Failed; }
-    if (s.indexOf('listen') >= 0) { return ConnectionStatus.Listening; }
-    return ConnectionStatus.Idle;
+  // Map the transport's TYPED lifecycle status to the UI ConnectionStatus. A typed switch (not the
+  // old substring match on free-form strings) means a transport-internal event can never silently
+  // mis-map into the UI's display/input gating — the coupling that disabled keyboard+touch when a
+  // surplus client was rejected. Streaming is emitted directly (on the first video frame), not here.
+  private mapServerStatus(s: ServerStatus): ConnectionStatus {
+    switch (s) {
+      case ServerStatus.Connected:    return ConnectionStatus.Connected;
+      case ServerStatus.ClientGone:   return ConnectionStatus.Listening;   // client left → back to listening
+      case ServerStatus.ListenFailed: return ConnectionStatus.Failed;
+      case ServerStatus.Listening:    return ConnectionStatus.Listening;
+      default:                        return ConnectionStatus.Idle;
+    }
   }
 }
