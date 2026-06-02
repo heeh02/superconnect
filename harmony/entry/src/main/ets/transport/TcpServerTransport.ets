@@ -103,15 +103,28 @@ export class TcpServerTransport {
    */
   start(preferredPort: number, bindAddress: string = '127.0.0.1'): void {
     this.boundAddress = bindAddress;
+    const isLoopback: boolean = bindAddress === '127.0.0.1' || bindAddress === '::1';
     const candidates: number[] = [];
-    for (let i = 0; i < 8; i++) { candidates.push(preferredPort + i); }
+    if (isLoopback) {
+      // WIRED (hdc fport): the Mac hard-codes the REMOTE port (WiredDiscovery), so a silent fallback
+      // to preferredPort+1 would leave the Mac forwarding to a dead port — wired breaks invisibly.
+      // Bind ONLY the preferred port; if it's occupied, fail loudly (ListenFailed) so the user frees
+      // the occupying app or switches to wireless. (Wireless keeps the fallback below: the real port
+      // is carried to the Mac via onListening → mDNS, so a fallback there is safe.)
+      candidates.push(preferredPort);
+    } else {
+      for (let i = 0; i < 8; i++) { candidates.push(preferredPort + i); }
+    }
     this.tryListen(bindAddress, candidates, 0);
   }
 
   private tryListen(bindAddress: string, ports: number[], i: number): void {
     if (i >= ports.length) {
       this.onStatus(ServerStatus.ListenFailed);
-      this.log('listen failed: no free port in ' + ports[0] + '..' + ports[ports.length - 1]);
+      const where: string = ports.length === 1
+        ? (bindAddress + ':' + ports[0] + ' occupied — close the occupying app or use wireless')
+        : ('no free port in ' + ports[0] + '..' + ports[ports.length - 1]);
+      this.log('listen failed: ' + where);
       return;
     }
     const port: number = ports[i];

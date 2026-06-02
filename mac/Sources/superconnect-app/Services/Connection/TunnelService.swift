@@ -29,10 +29,17 @@ final class HdcFportTunnel: TunnelService {
     func open(for endpoint: Endpoint) async throws -> TunnelTarget {
         guard case let .wiredHdc(serial, remote) = endpoint else { throw AppError.tunnelFailed }
         guard HdcTool.path() != nil else { throw AppError.hdcNotFound }
-        let local = LocalPort.free() ?? remote   // unique per device; fall back to the remote port (single-device)
-        guard HdcTool.fport(serial: serial, local: local, remote: remote) else { throw AppError.tunnelFailed }
-        opened = (serial, local, remote)
-        return .dial(host: "127.0.0.1", port: local)
+        // `LocalPort.free()` picks a free port then RELEASES it; between that and `hdc fport` binding
+        // it, another process can grab the port (a TOCTOU window) → fport fails. Retry up to 3× with a
+        // fresh local port before giving up, so a transient race doesn't fail the whole connect.
+        for _ in 0..<3 {
+            let local = LocalPort.free() ?? remote   // unique per device; fall back to the remote port (single-device)
+            if HdcTool.fport(serial: serial, local: local, remote: remote) {
+                opened = (serial, local, remote)
+                return .dial(host: "127.0.0.1", port: local)
+            }
+        }
+        throw AppError.tunnelFailed
     }
 
     func close() {
