@@ -2,13 +2,14 @@ import Combine
 
 /// What a live connection DOES, regardless of direction — so `ConnectionCoordinator` is
 /// role-agnostic. `HostConnection` (capture + send) is real today; `ReceiverConnection`
-/// (receive + display) is a stub. The dial target (host:port) is resolved by the
-/// coordinator's `TunnelService` before `connect` is called. Telemetry is optional and
-/// quarantined (host only).
+/// (receive + display) is a stub. `start(over:)` is DIRECTION-NEUTRAL: the coordinator resolves a
+/// `TunnelTarget` (via `TunnelService`) and hands it over; a host engine acts on `.dial`, a future
+/// receiver engine on `.listen`. The lifecycle never branches on direction. Telemetry is optional
+/// and quarantined (host only). See docs/MODULARITY_AUDIT.md.
 protocol ConnectionEngine: AnyObject {
     var statePublisher: AnyPublisher<ConnectionState, Never> { get }
     var telemetryPublisher: AnyPublisher<SessionTelemetry, Never>? { get }
-    func connect(host: String, port: UInt16)
+    func start(over target: TunnelTarget)
     func disconnect()
     /// Adjust the encode bitrate (Mbps) of a live link. Host-only; see the default below.
     func setBitrate(_ mbps: Int)

@@ -122,19 +122,21 @@ final class ConnectionCoordinator: ObservableObject {
 
         Task { [weak self] in
             do {
-                let dial = try await tunnel.open(for: device.endpoint)
+                let target = try await tunnel.open(for: device.endpoint)
                 // The user may have disconnected this device while the tunnel was opening. Only start
                 // the engine if this exact connection is still the registered one — otherwise undo the
                 // just-opened tunnel so we don't leave a zombie pipeline the registry no longer tracks.
+                // We hand the engine a direction-neutral TunnelTarget; the engine (host/receiver) acts
+                // on its own case, so this lifecycle stays role-agnostic. See docs/MODULARITY_AUDIT.md.
                 DispatchQueue.main.async {
                     guard let self, self.conns[device.id] === mc else { tunnel.close(); return }
-                    engine.connect(host: dial.host, port: dial.port)
+                    engine.start(over: target)
                 }
             } catch {
                 let appErr = (error as? AppError) ?? .tunnelFailed
                 DispatchQueue.main.async {
                     // Drop the half-open entry (close the tunnel defensively) so the user can retry;
-                    // keep the `.failed` state visible on the device's card. engine.connect() never ran,
+                    // keep the `.failed` state visible on the device's card. engine.start() never ran,
                     // so we must NOT call engine.disconnect() (it would unbalance the shared guard).
                     guard let self, self.conns[device.id] === mc else { return }
                     mc.bag.removeAll(); mc.tunnel.close()

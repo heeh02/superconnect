@@ -12,7 +12,8 @@ final class ReceiverConnection: ConnectionEngine {
     var statePublisher: AnyPublisher<ConnectionState, Never> { stateSubject.eraseToAnyPublisher() }
     var telemetryPublisher: AnyPublisher<SessionTelemetry, Never>? { nil }
 
-    func connect(host: String, port: UInt16) {
+    func start(over target: TunnelTarget) {
+        // FUTURE (#59): expect a `.listen` target, bind an NWListener, accept the host, decode + display.
         stateSubject.send(.failed(.receiverNotSupported))
     }
 

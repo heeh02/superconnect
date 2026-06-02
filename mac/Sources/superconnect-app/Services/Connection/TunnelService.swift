@@ -1,11 +1,22 @@
 import Foundation
 import Darwin
 
-/// Abstracts the local→peer plumbing so `connect` is identical for wired and wireless.
-/// Wired opens an `hdc fport` and returns 127.0.0.1:port; wireless returns the device's
-/// own host:port untouched.
+/// The direction-typed result of opening a tunnel: WHERE the engine operates and HOW. This is the
+/// seam that keeps connection DIRECTION out of the coordinator's lifecycle — the coordinator just
+/// hands this to `engine.start(over:)` and the engine interprets its own case. Today every tunnel
+/// yields `.dial` (host role dials out); a future receiver-side tunnel yields `.listen` (bind +
+/// accept) and the receiver engine fills that branch — no coordinator change. See docs/MODULARITY_AUDIT.md.
+enum TunnelTarget {
+    case dial(host: String, port: UInt16)     // host role: dial OUT to this address
+    case listen(host: String, port: UInt16)   // receiver role: BIND + accept here (future, #59)
+}
+
+/// Abstracts the local→peer plumbing so the engine's `start` is identical for wired and wireless.
+/// Wired opens an `hdc fport` and yields `.dial(127.0.0.1:port)`; wireless yields the device's own
+/// `.dial(host:port)` untouched. The factory pairs a tunnel with a role-matched engine, so direction
+/// is chosen at composition time, never branched on in the lifecycle.
 protocol TunnelService {
-    func open(for endpoint: Endpoint) async throws -> (host: String, port: UInt16)
+    func open(for endpoint: Endpoint) async throws -> TunnelTarget
     func close()
 }
 
@@ -15,13 +26,13 @@ protocol TunnelService {
 final class HdcFportTunnel: TunnelService {
     private var opened: (serial: String, local: UInt16, remote: UInt16)?
 
-    func open(for endpoint: Endpoint) async throws -> (host: String, port: UInt16) {
+    func open(for endpoint: Endpoint) async throws -> TunnelTarget {
         guard case let .wiredHdc(serial, remote) = endpoint else { throw AppError.tunnelFailed }
         guard HdcTool.path() != nil else { throw AppError.hdcNotFound }
         let local = LocalPort.free() ?? remote   // unique per device; fall back to the remote port (single-device)
         guard HdcTool.fport(serial: serial, local: local, remote: remote) else { throw AppError.tunnelFailed }
         opened = (serial, local, remote)
-        return ("127.0.0.1", local)
+        return .dial(host: "127.0.0.1", port: local)
     }
 
     func close() {
@@ -57,9 +68,9 @@ enum LocalPort {
 
 /// Wireless pass-through stub: a LAN/Wi-Fi device is dialed directly, no tunnel.
 final class DirectTunnel: TunnelService {
-    func open(for endpoint: Endpoint) async throws -> (host: String, port: UInt16) {
+    func open(for endpoint: Endpoint) async throws -> TunnelTarget {
         guard case let .tcp(host, port) = endpoint else { throw AppError.tunnelFailed }
-        return (host, port)
+        return .dial(host: host, port: port)
     }
     func close() {}
 }

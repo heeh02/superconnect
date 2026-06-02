@@ -61,7 +61,15 @@ final class HostConnection: ConnectionEngine {
 
     // MARK: - ConnectionEngine
 
-    func connect(host: String, port: UInt16) {
+    func start(over target: TunnelTarget) {
+        // A host engine can only DIAL out. A `.listen` target would mean the factory paired a host
+        // engine with a receiver-side tunnel — a composition wiring bug, not a runtime condition —
+        // so fail loudly rather than silently no-op.
+        guard case let .dial(host, port) = target else {
+            diag("HostConnection got non-dial target \(target) — refusing (host can only dial)")
+            stateSubject.send(.failed(.tunnelFailed))
+            return
+        }
         lifeQ.async {
             self.host = host
             self.port = port
