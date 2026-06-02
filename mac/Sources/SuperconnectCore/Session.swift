@@ -17,7 +17,6 @@ public final class Session {
     /// v2 handshake peer identity/role (nil when talking to a v1 peer — treat as v1 defaults).
     public private(set) var peerId: String?
     public private(set) var peerPlatform: String?
-    public private(set) var peerAcceptedRole: String?
     public private(set) var peerProtocolVersion: Int = 1
     /// The peer's friendly device name from hello_ack (e.g. "HUAWEI MatePad Pro") — surfaced so even a
     /// wired card, named by hdc serial at discovery, shows the real device once connected.
@@ -153,7 +152,9 @@ public final class Session {
             peerCaps = object["caps"] as? [String: Any]
             peerId = object["peerId"] as? String
             peerPlatform = object["platform"] as? String
-            peerAcceptedRole = object["acceptedRole"] as? String
+            // NOTE: `acceptedRole` is intentionally NOT parsed. Today the responder hardcodes its role
+            // and the initiator assumes host, so a parsed value would be a facade no one may trust.
+            // v1 symmetric roles (#59) reintroduce it via a typed Role↔wire codec. See docs/MODULARITY_AUDIT.md.
             peerDeviceName = object["deviceName"] as? String
             peerProtocolVersion = (object["protocolVersion"] as? Int) ?? 1   // absent ⇒ v1 peer
             onLog?("received hello_ack (v\(peerProtocolVersion) platform=\(peerPlatform ?? "?"))")

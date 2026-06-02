@@ -90,8 +90,13 @@ struct Index {
     mgr.onLog = (msg: string): void => { this.appendLog(msg); };
     mgr.onStatus = (s: ConnectionStatus): void => {
       this.connStatus = s;
-      // Stream ended while fullscreen → drop back to the windowed window state.
-      if (s !== ConnectionStatus.Streaming && this.displayMode === DisplayMode.Fullscreen) {
+      // Auto-exit fullscreen ONLY on a TERMINAL status (session truly gone/failed), NOT on every
+      // non-Streaming value. Display-mode and link-state are two separate concerns: a transient
+      // ClientGone→Listening blip (e.g. a Wi-Fi roam, or the single-active guard rejecting a 2nd
+      // client) must NOT yank the user out of fullscreen — that conflation is the same one-signal-
+      // two-concerns trap behind the earlier keyboard/touch regressions. See docs/MODULARITY_AUDIT.md.
+      if ((s === ConnectionStatus.Failed || s === ConnectionStatus.Idle)
+          && this.displayMode === DisplayMode.Fullscreen) {
         this.exitFullscreen();
       }
     };
