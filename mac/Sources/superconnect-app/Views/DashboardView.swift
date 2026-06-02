@@ -2,7 +2,8 @@ import SwiftUI
 
 /// The unified window root: a sidebar listing every discovered device + a detail pane for the
 /// selected one. Binds only to `AppViewModel`; reuses StatusDot / TransportBadge / EmptyStateView.
-/// Shaped for multi-device (the sidebar lists all); one active connection at a time today.
+/// Shaped for multi-device: several DIFFERENT tablets may be connected at once (#51); a
+/// per-physical-tablet single-active rule blocks double-connecting ONE tablet (see docs/CONFLICTS.md).
 struct DashboardView: View {
     @ObservedObject var vm: AppViewModel
     @State private var newWirelessIP: String = ""
@@ -38,7 +39,7 @@ struct DashboardView: View {
             } else {
                 List(vm.devices, selection: Binding(
                     get: { vm.selectedDeviceID },
-                    set: { if let id = $0 { vm.select(id) } }   // routes through the mid-connection guard
+                    set: { if let id = $0 { vm.select(id) } }   // select only changes the detail pane (no connection side effect, #51)
                 )) { device in
                     SidebarRow(device: device, name: vm.displayName(for: device), state: vm.state(for: device.id))
                         .contextMenu {

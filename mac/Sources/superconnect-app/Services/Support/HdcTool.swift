@@ -59,6 +59,18 @@ enum HdcTool {
             .filter { !$0.isEmpty && !$0.hasPrefix("[") && $0 != "Empty" }
     }
 
+    /// The device's friendly market name (e.g. "HUAWEI MatePad Pro") via `param get const.product.name`,
+    /// so the wired card shows the real name in the list — not just the hdc serial. nil if unavailable.
+    static func deviceName(serial: String) -> String? {
+        guard let hdc = path() else { return nil }
+        let r = run(hdc, ["-t", serial, "shell", "param", "get", "const.product.name"])
+        guard r.exit == 0 else { return nil }
+        let name = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = name.lowercased()
+        guard !name.isEmpty, !lower.contains("fail"), !lower.contains("error") else { return nil }
+        return name
+    }
+
     /// Forward `tcp:<local>` on this Mac to `tcp:<remote>` on the given device. The LOCAL port must be
     /// unique per device (so several tablets don't collide on one Mac, #51); the REMOTE port is the
     /// tablet's fixed listen port inside its own process (same value on every tablet is fine).

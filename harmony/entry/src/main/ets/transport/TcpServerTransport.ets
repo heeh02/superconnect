@@ -8,7 +8,9 @@
  * Only this file knows about sockets; Session and above are transport-agnostic.
  */
 import socket from '@ohos.net.socket';
+import util from '@ohos.util';
 import { Session } from '../session/Session';
+import { Channel, encodeFrame } from '../protocol/FrameCodec';
 
 export class TcpServerTransport {
   private server: socket.TCPSocketServer = socket.constructTCPSocketServerInstance();
@@ -21,6 +23,8 @@ export class TcpServerTransport {
   private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string) => Promise<boolean>) | null;
   private currentSend: ((bytes: Uint8Array) => void) | null = null;
   private currentClientId: number = -1;
+  // Encodes the one-off 'session_busy' rejection frame (single-active-session guard). Reused.
+  private busyEncoder: util.TextEncoder = new util.TextEncoder();
   private boundAddress: string = '127.0.0.1';
   private boundPort: number = 0;   // the port actually bound (preferred, or a fallback if occupied)
   // Fired once the socket is listening (after listen succeeds). WirelessService uses this to
@@ -47,6 +51,30 @@ export class TcpServerTransport {
   sendFrame(bytes: Uint8Array): void {
     if (this.currentSend !== null) {
       this.currentSend(bytes);
+    }
+  }
+
+  /**
+   * Reject a surplus client (single-active-session guard): send a framed `{type:error,
+   * message:session_busy}` CONTROL frame, then close the socket. The explicit error lets the Mac fail
+   * fast and surface a clear "已被占用" state instead of retry-looping on a silent close. Does NOT touch
+   * currentSend/currentClientId — the live session's slot stays intact.
+   */
+  private rejectBusy(client: socket.TCPSocketConnection): void {
+    try {
+      const json: string = '{"type":"error","message":"session_busy"}';
+      const payload: Uint8Array = this.busyEncoder.encodeInto(json);
+      const frame: Uint8Array = encodeFrame(Channel.CONTROL, 0, payload);
+      const opt: socket.TCPSendOptions = { data: frame.buffer as ArrayBuffer };
+      client.send(opt)
+        .then((): void => { client.close().catch((e: Object): void => this.log('busy close err ' + JSON.stringify(e))); })
+        .catch((e: Object): void => {
+          this.log('busy send err ' + JSON.stringify(e));
+          client.close().catch((e2: Object): void => {});
+        });
+    } catch (e) {
+      this.log('rejectBusy failed ' + JSON.stringify(e));
+      client.close().catch((e2: Object): void => {});
     }
   }
 
@@ -87,6 +115,21 @@ export class TcpServerTransport {
 
   private attachConnectHandler(): void {
     this.server.on('connect', (client: socket.TCPSocketConnection) => {
+      // SINGLE-ACTIVE-SESSION GUARD (see docs/CONFLICTS.md). The tablet is structurally single-session
+      // — ONE decoder, ONE surface, ONE input-send slot — so a second concurrent client would
+      // interleave two video streams into one decoder (corrupt display) and misroute input. Reject the
+      // newcomer and KEEP the incumbent. This runs BEFORE currentSend/currentClientId are assigned, so
+      // the live session's input slot is never clobbered; currentClientId returns to -1 when the active
+      // client closes (see the 'close' handler), so a later reconnect is accepted normally. It is the
+      // ONLY place "many Macs / many transports → one tablet" can be arbitrated (neither Mac sees the
+      // other), and a no-op when wireless is off (≤1 hdc client). We send an explicit 'session_busy'
+      // error so the Mac fails fast (no reconnect-loop) instead of treating a silent close as a drop.
+      if (this.currentClientId !== -1) {
+        this.log('rejecting 2nd client id=' + client.clientId + ' — single active session (incumbent=' + this.currentClientId + ')');
+        this.onStatus('已拒绝第二个连接（同一时间仅支持一条连接）');
+        this.rejectBusy(client);
+        return;
+      }
       this.onStatus('client connected');
       this.log('client connected (id=' + client.clientId + ')');
 

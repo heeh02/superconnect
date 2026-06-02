@@ -11,4 +11,6 @@ struct SessionTelemetry: Equatable {
     var bitrateMbps: Int = 0        // target (set) bitrate
     var actualMbps: Int = 0         // measured output bitrate (encoded bytes/sec over the last window)
     var deviceName: String?         // peer's real name from hello_ack — overrides a serial-based card name
+    var peerId: String?             // peer's stable cross-transport id from hello_ack — used to reconcile
+                                    // the same physical tablet reached over two transports (see CONFLICTS.md)
 }

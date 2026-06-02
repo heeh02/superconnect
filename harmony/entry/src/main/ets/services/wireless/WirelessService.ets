@@ -210,10 +210,11 @@ export class WirelessService {
     if (isLocalhost) { return Promise.resolve(true); }            // hdc/USB → always trusted
     if (!this.enabledFlag) { return Promise.resolve(false); }     // wireless off → refuse LAN
     // BLE proximity proof: a hello carrying the CURRENT bootstrap token (delivered over short-range
-    // BLE, never broadcast on Wi-Fi) auto-trusts + remembers the peer — a remote LAN replayer of a
-    // sniffed peerId has no valid token. Token is rotated each time wireless is enabled.
+    // BLE, never broadcast on Wi-Fi) auto-trusts this connection — a remote LAN replayer of a sniffed
+    // peerId has no valid token. SESSION-ONLY: we do NOT persist the peer, so a one-time in-BLE-range
+    // device can't gain permanent prompt-free trust, and token rotation (per wireless-enable) revokes
+    // access. Permanent trust is granted ONLY by an explicit 允许 tap (settlePending).
     if (token !== '' && token === this.bleToken) {
-      if (peerId !== '') { this.pairing.trust(peerId, deviceName); }
       return Promise.resolve(true);
     }
     if (peerId === '') { return Promise.resolve(false); }         // can't TOFU an anonymous peer

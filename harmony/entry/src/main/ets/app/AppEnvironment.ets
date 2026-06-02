@@ -3,6 +3,7 @@ import { ConnectionEngine } from '../services/connection/ConnectionEngine';
 import { ReceiverConnection } from '../services/connection/role/ReceiverConnection';
 import { HostConnection } from '../services/connection/role/HostConnection';
 import { WirelessService } from '../services/wireless/WirelessService';
+import { initStablePeerId } from '../services/DeviceIdentity';
 import { Role } from '../models/Role';
 import { common } from '@kit.AbilityKit';
 
@@ -15,6 +16,7 @@ export class AppEnvironment {
   readonly wireless: WirelessService;
 
   constructor(port: number, ctx: common.UIAbilityContext) {
+    initStablePeerId(ctx);   // load-or-mint the persisted cross-transport peer id once, at startup
     this.wireless = new WirelessService(ctx);
     // The receiver binds where WirelessService says, consults its TOFU gate for LAN clients,
     // reports listen-success so WirelessService can advertise over mDNS, and reports client-gone

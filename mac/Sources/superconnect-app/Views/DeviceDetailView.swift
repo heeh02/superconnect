@@ -101,6 +101,7 @@ struct DeviceDetailView: View {
         case .connecting:      return "连接中…"
         case .needsPermission: return "需要权限"
         case .failed:          return "连接失败"
+        case .blocked:         return "已被占用"
         case .idle:            return "未连接"
         }
     }

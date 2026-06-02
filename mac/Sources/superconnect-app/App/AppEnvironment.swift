@@ -17,7 +17,8 @@ final class AppEnvironment {
         ])
         coordinator = ConnectionCoordinator(
             tunnelFor: { kind in kind == .wired ? HdcFportTunnel() as TunnelService : DirectTunnel() as TunnelService },
-            engineFor: { _ in HostConnection() }   // future: .host→HostConnection / .receiver→ReceiverConnection
+            engineFor: { _ in HostConnection() },  // future: .host→HostConnection / .receiver→ReceiverConnection
+            policy: DefaultConnectionPolicy()      // single-active-per-physical-tablet (see docs/CONFLICTS.md)
         )
         viewModel = AppViewModel(store: store, coordinator: coordinator, manual: manual)
         store.start()   // discover immediately so the popover isn't empty on first open

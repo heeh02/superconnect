@@ -9,6 +9,10 @@ enum ConnectionState: Equatable {
     case connected
     case needsPermission(AppError)
     case failed(AppError)
+    /// The tablet refused this connection because it is already serving another link (single-active
+    /// session). Terminal like `.failed`, but a distinct, calm state — the user disconnects the other
+    /// link (or the other transport) rather than retrying. See docs/CONFLICTS.md.
+    case blocked(AppError)
 
     var isBusy: Bool { self == .connecting }
     var isConnected: Bool { self == .connected }

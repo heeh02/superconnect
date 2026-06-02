@@ -148,10 +148,24 @@ public final class TcpTransport: Transport {
 
     /// The physical (non-virtual) interface to bind a LAN connection to — preferring Wi-Fi, then
     /// wired Ethernet, then any non-virtual/non-loopback/non-cellular interface. Discovered via a
-    /// one-shot NWPathMonitor (resolves near-instantly; bounded wait). Returns nil if none — caller
+    /// one-shot NWPathMonitor (resolves near-instantly; bounded 0.6s wait so a retry burst — every
+    /// 1.5s — never stalls the lifecycle thread for long). The result is cached for a short TTL so
+    /// repeated dials reuse it instead of re-probing each time; a Wi-Fi↔Ethernet switch is picked up
+    /// once the TTL lapses. Returns nil only if nothing resolves and nothing was ever cached — caller
     /// then falls back. This is what lets the socket use the physical interface's scoped routing,
     /// bypassing a VPN that hijacks the global route to the LAN IP.
+    private static let cacheLock = NSLock()
+    private static var cachedInterface: NWInterface?
+    private static var cachedAt: Date = .distantPast
+    private static let cacheTTL: TimeInterval = 10
+
     private static func physicalInterface() -> NWInterface? {
+        cacheLock.lock()
+        if let c = cachedInterface, Date().timeIntervalSince(cachedAt) < cacheTTL {
+            cacheLock.unlock(); return c
+        }
+        cacheLock.unlock()
+
         let monitor = NWPathMonitor()
         let sem = DispatchSemaphore(value: 0)
         var iface: NWInterface?
@@ -162,9 +176,14 @@ public final class TcpTransport: Transport {
             sem.signal()
         }
         monitor.start(queue: DispatchQueue(label: "superconnect.pathprobe"))
-        _ = sem.wait(timeout: .now() + 1.5)
+        _ = sem.wait(timeout: .now() + 0.6)
         monitor.cancel()
-        return iface
+
+        cacheLock.lock()
+        if let iface { cachedInterface = iface; cachedAt = Date() }
+        let result = iface ?? cachedInterface   // probe timed out → reuse last-known rather than nil
+        cacheLock.unlock()
+        return result
     }
 
     /// Append a diagnostic line to /tmp/sc-mac-diag.log (shared with the app's BLE/host diag). Self-bounding.

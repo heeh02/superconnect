@@ -25,6 +25,10 @@ final class ConnectionCoordinator: ObservableObject {
 
     private let tunnelFor: TunnelFactory
     private let engineFor: RoleFactory
+    /// The injected cross-device conflict policy (single-active-per-physical-tablet). The coordinator
+    /// asks and obeys; it never owns the predicate (keeps this registry a dumb, per-device-isolated
+    /// store). See docs/CONFLICTS.md.
+    private let policy: ConnectionPolicy
 
     /// One live link per device: the engine, its tunnel, and the subscriptions feeding `states`/`telemetry`.
     private final class ManagedConnection {
@@ -32,15 +36,20 @@ final class ConnectionCoordinator: ObservableObject {
         let engine: ConnectionEngine
         let tunnel: TunnelService
         var bag = Set<AnyCancellable>()
+        /// The peer's cross-transport identity, learned from hello_ack telemetry (nil until confirmed).
+        /// Used for Tier-2 reconciliation of the wired+wireless duplicate the connect-time policy can't
+        /// pre-detect.
+        var peerID: String?
         init(device: Device, engine: ConnectionEngine, tunnel: TunnelService) {
             self.device = device; self.engine = engine; self.tunnel = tunnel
         }
     }
     private var conns: [String: ManagedConnection] = [:]
 
-    init(tunnelFor: @escaping TunnelFactory, engineFor: @escaping RoleFactory) {
+    init(tunnelFor: @escaping TunnelFactory, engineFor: @escaping RoleFactory, policy: ConnectionPolicy) {
         self.tunnelFor = tunnelFor
         self.engineFor = engineFor
+        self.policy = policy
     }
 
     // MARK: - Queries
@@ -57,6 +66,14 @@ final class ConnectionCoordinator: ObservableObject {
     /// other connection — no longer tears anything else down.
     func connect(_ device: Device, as role: Role = .host) {
         guard conns[device.id] == nil else { return }
+
+        // Cross-device conflict gate: refuse a connection to a physical tablet that already has a live
+        // link (e.g. the same tablet shown as a second wireless card). SOFT — it only blocks a provable
+        // same-device duplicate; distinct tablets always pass, so one Mac → many tablets is unaffected.
+        if case .refuse(let reason) = policy.admit(device, against: liveLinkInfos()) {
+            states[device.id] = .blocked(reason)
+            return
+        }
 
         if let err = SystemPermissions.preflight(for: role) {
             states[device.id] = .needsPermission(err)
@@ -79,7 +96,17 @@ final class ConnectionCoordinator: ObservableObject {
             .store(in: &mc.bag)
         engine.telemetryPublisher?
             .receive(on: RunLoop.main)
-            .sink { [weak self] t in self?.telemetry[device.id] = t }
+            .sink { [weak self, weak mc] t in
+                guard let self else { return }
+                self.telemetry[device.id] = t
+                // Tier-2: capture the peer's confirmed cross-transport identity (from hello_ack) and, if
+                // it duplicates another live link, reconcile (tear down this newcomer). weak mc so the
+                // subscription stored in mc.bag doesn't retain-cycle the connection.
+                if let mc, let pid = t.peerId, !pid.isEmpty, mc.peerID != pid {
+                    mc.peerID = pid
+                    self.reconcile(confirmed: mc, peerID: pid)
+                }
+            }
             .store(in: &mc.bag)
 
         Task { [weak self] in
@@ -122,6 +149,28 @@ final class ConnectionCoordinator: ObservableObject {
     /// Tear down every link (app teardown).
     func disconnectAll() {
         for id in Array(conns.keys) { disconnect(deviceID: id) }
+    }
+
+    /// Read-only projection of the live links for `ConnectionPolicy` (no internals leak out).
+    private func liveLinkInfos() -> [LiveLinkInfo] {
+        conns.values.map { mc in
+            LiveLinkInfo(deviceID: mc.device.id, transport: mc.device.transport,
+                         physicalKey: PhysicalKey.from(mc.device), peerID: mc.peerID)
+        }
+    }
+
+    /// Tier-2 conflict resolution. Once a link's cross-transport `peerId` is confirmed, if ANOTHER live
+    /// link already carries the same `peerId` they are the same physical tablet reached two ways (the
+    /// wired+wireless duplicate the connect-time policy can't see across the serial/host namespace gap).
+    /// Keep the incumbent, tear down this newcomer with `.blocked`. Belt-and-suspenders for the tablet's
+    /// own single-active guard (and a safety net for an older tablet lacking it). Main-thread only.
+    private func reconcile(confirmed mc: ManagedConnection, peerID: String) {
+        let dupID = mc.device.id
+        for other in conns.values where other !== mc && other.peerID == peerID {
+            disconnect(deviceID: dupID)                       // clears states/telemetry/conns for dupID
+            states[dupID] = .blocked(.alreadyConnectedElsewhere)
+            return
+        }
     }
 
     /// Apply a bitrate (Mbps) to every live engine — the global bitrate setting fans out to all

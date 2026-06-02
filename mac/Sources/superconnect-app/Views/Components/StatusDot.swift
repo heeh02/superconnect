@@ -9,6 +9,7 @@ struct StatusDot: View {
         case .connected:                     return .green
         case .connecting:                    return .orange
         case .needsPermission, .failed:      return .red
+        case .blocked:                       return .orange
         case .idle:                          return .secondary
         }
     }

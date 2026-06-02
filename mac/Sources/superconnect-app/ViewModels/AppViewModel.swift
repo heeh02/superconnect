@@ -110,10 +110,13 @@ final class AppViewModel: ObservableObject {
         if isConnected(device.id) || isBusy(device.id) {
             coordinator.disconnect(deviceID: device.id)
         } else {
-            // .idle / .failed / .needsPermission → (re)connect. A terminal engine failure (e.g. a
-            // wireless pairing rejection) leaves a stopped engine registered; coordinator.connect is
-            // idempotent and would no-op, so drop the stale entry first.
-            if case .failed = state(for: device.id) { coordinator.disconnect(deviceID: device.id) }
+            // .idle / .failed / .needsPermission / .blocked → (re)connect. A terminal engine failure
+            // (pairing rejection, or a single-active-session block) leaves a stopped engine registered;
+            // coordinator.connect is idempotent and would no-op, so drop the stale entry first.
+            switch state(for: device.id) {
+            case .failed, .blocked: coordinator.disconnect(deviceID: device.id)
+            default: break
+            }
             coordinator.connect(device, as: .host)
             coordinator.applyBitrate(Int(bitrateMbps))   // seed the new link with the current global bitrate
         }

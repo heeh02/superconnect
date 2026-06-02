@@ -10,6 +10,8 @@ enum AppError: Error, Equatable {
     case connectionFailed
     case receiverNotSupported
     case pairingRejected
+    case wirelessUnreachable
+    case alreadyConnectedElsewhere
 
     var userMessage: String {
         switch self {
@@ -27,6 +29,10 @@ enum AppError: Error, Equatable {
             return "此设备方向暂不支持（即将推出）"
         case .pairingRejected:
             return "平板未授权本机连接。请在平板上点「允许」配对后重试"
+        case .wirelessUnreachable:
+            return "多次连接超时，无法到达平板。若开启了 VPN/EasyConnect，请尝试关闭后重连，或确认平板 IP 与无线模式已开启"
+        case .alreadyConnectedElsewhere:
+            return "该平板已被另一连接占用（同一时间仅支持一条连接）。请先断开有线/无线中的另一条，再连接此设备"
         }
     }
 }

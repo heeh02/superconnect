@@ -19,6 +19,11 @@ final class HostConnection: ConnectionEngine {
     private let maxFps = 120
     private var pairingToken: String?   // wireless BLE proximity token to present in hello (nil = none)
     private var avoidVirtualInterfaces = false   // wireless: dial over physical NIC, excluding VPN/utun
+    // Consecutive connect-timeout watchdog trips. A VPN/EasyConnect route hijack makes every dial time
+    // out, and the plain retry loop would re-attempt forever; after this many in a row we stop with a
+    // clear error instead of spinning. Reset on a real connect (onConnected) and on a fresh connect().
+    private var consecutiveTimeouts = 0
+    private let maxConsecutiveTimeouts = 3
 
     private var host = "127.0.0.1"
     private var port: UInt16 = 8888
@@ -63,6 +68,7 @@ final class HostConnection: ConnectionEngine {
             self.running = true
             self.generation += 1
             let gen = self.generation
+            self.consecutiveTimeouts = 0   // fresh user-initiated connect → reset the timeout streak
             self.tele = SessionTelemetry(); self.tele.bitrateMbps = self.bitrateMbps
             self.stateSubject.send(.connecting)
             if !self.guardRetained { DisplayModeGuard.shared.retain(); self.guardRetained = true }   // pin real-display resolution before adding the virtual one
@@ -145,7 +151,9 @@ final class HostConnection: ConnectionEngine {
             guard let self, let session else { return }
             self.lifeQ.async {
                 guard self.running, gen == self.generation else { return }
+                self.consecutiveTimeouts = 0   // a real connection landed → streak broken
                 self.tele.deviceName = session.peerDeviceName   // surface the real name (wired card too)
+                self.tele.peerId = session.peerId               // cross-transport id for conflict reconcile
                 self.buildPipeline(caps: session.peerCaps, gen: gen)
             }
         }
@@ -173,9 +181,36 @@ final class HostConnection: ConnectionEngine {
                     self.running = false
                     self.teardownSession()
                     self.stateSubject.send(.failed(.pairingRejected))
-                } else {
-                    self.retry(gen: gen)
+                    return
                 }
+                // The tablet is already serving another link (single-active session). FATAL like a
+                // rejection — retrying would just bounce off the tablet's guard forever. Surface a calm
+                // .blocked so the user disconnects the other link instead of seeing a retry storm.
+                if msg.contains("session_busy") {
+                    self.diag("tablet busy (single active session) — fatal (no retry)")
+                    self.generation += 1
+                    self.running = false
+                    self.teardownSession()
+                    self.stateSubject.send(.blocked(.alreadyConnectedElsewhere))
+                    return
+                }
+                // Repeated connect-timeouts mean the route never reaches the tablet — classically a
+                // VPN/EasyConnect hijack capturing the LAN IP onto utun. Cap the retries so we surface
+                // an actionable error instead of looping forever (each attempt already burns a 10s
+                // watchdog). Wired vs wireless pick different guidance.
+                if msg.contains("connect timeout") {
+                    self.consecutiveTimeouts += 1
+                    if self.consecutiveTimeouts >= self.maxConsecutiveTimeouts {
+                        let reason: AppError = self.avoidVirtualInterfaces ? .wirelessUnreachable : .tunnelFailed
+                        self.diag("connect timeout x\(self.consecutiveTimeouts) — fatal (\(reason))")
+                        self.generation += 1
+                        self.running = false
+                        self.teardownSession()
+                        self.stateSubject.send(.failed(reason))
+                        return
+                    }
+                }
+                self.retry(gen: gen)
             }
         }
         session.onClosed = { [weak self] in self?.lifeQ.async { self?.retry(gen: gen) } }

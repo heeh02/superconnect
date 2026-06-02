@@ -24,6 +24,11 @@ final class BleDiscovery: NSObject, DeviceDiscovery {
     private var wantScan = false
     /// Resolved devices keyed by the peripheral identity (stable per-Mac) so re-reads dedupe.
     private var found: [String: Device] = [:]
+    /// Last time each device's advert was seen — used to age out tablets that left range / turned
+    /// wireless off / rotated their token (CoreBluetooth gives no "gone" callback for adverts).
+    private var lastSeen: [String: Date] = [:]
+    private var pruneTimer: DispatchSourceTimer?
+    private static let staleAfter: TimeInterval = 20   // drop a device not re-advertised within this
 
     var devices: AnyPublisher<[Device], Never> { subject.eraseToAnyPublisher() }
 
@@ -31,6 +36,7 @@ final class BleDiscovery: NSObject, DeviceDiscovery {
         bleQueue.async { [weak self] in
             guard let self else { return }
             self.wantScan = true
+            self.startPruneTimer()
             if self.central == nil {
                 self.central = CBCentralManager(delegate: self, queue: self.bleQueue)   // triggers BT permission prompt
             } else if self.central?.state == .poweredOn {
@@ -44,7 +50,9 @@ final class BleDiscovery: NSObject, DeviceDiscovery {
             guard let self else { return }
             self.wantScan = false
             self.central?.stopScan()
+            self.pruneTimer?.cancel(); self.pruneTimer = nil
             self.found.removeAll()
+            self.lastSeen.removeAll()
             self.subject.send([])
         }
     }
@@ -54,9 +62,28 @@ final class BleDiscovery: NSObject, DeviceDiscovery {
     private func beginScan() {
         diag("scan start (auth=\(CBManager.authorization.rawValue))")
         // Scan ALL devices and filter by our manufacturer id — robust regardless of which advert
-        // packet carries the service UUID. allowDuplicates off: one callback per advert change.
+        // packet carries the service UUID. allowDuplicates ON so a still-present tablet keeps
+        // refreshing its last-seen stamp (and any rotated token), enabling reliable staleness pruning.
         central?.scanForPeripherals(withServices: nil,
-                                    options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+                                    options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+    }
+
+    /// Drop devices whose advert hasn't been seen within `staleAfter` (left range / wireless off).
+    private func startPruneTimer() {
+        guard pruneTimer == nil else { return }
+        let t = DispatchSource.makeTimerSource(queue: bleQueue)
+        t.schedule(deadline: .now() + 5, repeating: 5)
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            let cutoff = Date().addingTimeInterval(-BleDiscovery.staleAfter)
+            let stale = self.lastSeen.filter { $0.value < cutoff }.map { $0.key }
+            guard !stale.isEmpty else { return }
+            for id in stale { self.found[id] = nil; self.lastSeen[id] = nil }
+            self.diag("pruned \(stale.count) stale device(s)")
+            self.publish()
+        }
+        t.resume()
+        pruneTimer = t
     }
 
     private func publish() { subject.send(Array(found.values).sorted { $0.name < $1.name }) }
@@ -106,6 +133,8 @@ extension BleDiscovery: CBCentralManagerDelegate {
         guard let mfr = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
               let device = BleDiscovery.device(from: mfr, name: peripheral.name, peripheralId: peripheral.identifier)
         else { return }
+        lastSeen[device.id] = Date()                 // keep-alive (allowDuplicates fires repeatedly)
+        guard found[device.id] != device else { return }   // unchanged → just refreshed; don't republish
         if found[device.id] == nil { diag("read OK \(device.name) \(device.endpoint) tok=\(device.pairingToken != nil)") }
         found[device.id] = device
         publish()

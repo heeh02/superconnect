@@ -19,7 +19,7 @@ struct ConnectionToggle: View {
 
     private var errorText: String? {
         switch state {
-        case .needsPermission(let e), .failed(let e): return e.userMessage
+        case .needsPermission(let e), .failed(let e), .blocked(let e): return e.userMessage
         default: return nil
         }
     }

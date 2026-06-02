@@ -10,7 +10,7 @@ import { Callback } from '@ohos.base';
 import hilog from '@ohos.hilog';
 import sc from 'libsuperconnect.so';
 import { Channel, Frame, FrameDecoder, encodeFrame } from '../protocol/FrameCodec';
-import { deviceDisplayName } from '../services/DeviceIdentity';
+import { deviceDisplayName, stablePeerId } from '../services/DeviceIdentity';
 
 export type SendFn = (bytes: Uint8Array) => void;
 export type LogFn = (msg: string) => void;
@@ -54,13 +54,9 @@ interface ControlMsg {
   pairingToken?: string; // BLE-delivered proximity token (Mac→Pad in hello); auto-trusts if it matches
 }
 
-// Stable peer id for the v2 handshake. Per-process for now; TODO: persist across launches via
-// @ohos.data.preferences so it's truly per-install (the trust/routing key for v1 multi-device).
-let MODULE_PEER_ID: string = '';
-function localPeerId(): string {
-  if (MODULE_PEER_ID.length === 0) { MODULE_PEER_ID = util.generateRandomUUID(true); }
-  return MODULE_PEER_ID;
-}
+// The tablet's stable per-install peer id lives in DeviceIdentity (persisted via @ohos.data.preferences,
+// loaded once at startup) so it survives relaunches — the reliable cross-transport key for v1
+// multi-device conflict reconciliation. See docs/CONFLICTS.md.
 
 export class Session {
   private decoder: FrameDecoder = new FrameDecoder();
@@ -254,7 +250,7 @@ export class Session {
       role: 'pad',
       protocolVersion: 2,
       // v2 (all additive — a v1 Mac ignores these): identity + the role this side accepts.
-      peerId: localPeerId(),
+      peerId: stablePeerId(),
       platform: 'harmonyos',
       deviceName: deviceDisplayName(),
       supportedRoles: ['receiver'],
