@@ -18,7 +18,7 @@ export class TcpServerTransport {
   private onVideoConfig: ((width: number, height: number, codec: string, hdr: string) => void) | null;
   // Wireless TOFU gate (null ⇒ wired/no gate). Installed onto each Session so an unknown LAN client
   // must be approved before hello_ack. The wired path passes null → behavior unchanged.
-  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number) => Promise<boolean>) | null;
+  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string) => Promise<boolean>) | null;
   private currentSend: ((bytes: Uint8Array) => void) | null = null;
   private currentClientId: number = -1;
   private boundAddress: string = '127.0.0.1';
@@ -35,7 +35,7 @@ export class TcpServerTransport {
               onStatus: (s: string) => void,
               onVideo: ((payload: Uint8Array, isKeyframe: boolean) => void) | null = null,
               onVideoConfig: ((width: number, height: number, codec: string, hdr: string) => void) | null = null,
-              pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number) => Promise<boolean>) | null = null) {
+              pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string) => Promise<boolean>) | null = null) {
     this.log = log;
     this.onStatus = onStatus;
     this.onVideo = onVideo;

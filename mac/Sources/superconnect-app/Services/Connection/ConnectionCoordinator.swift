@@ -65,6 +65,7 @@ final class ConnectionCoordinator: ObservableObject {
 
         let tunnel = tunnelFor(device.transport)
         let engine = engineFor(role)
+        engine.setPairingToken(device.pairingToken)   // wireless BLE proximity token (nil otherwise)
         let mc = ManagedConnection(device: device, engine: engine, tunnel: tunnel)
         conns[device.id] = mc
         states[device.id] = .connecting

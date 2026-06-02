@@ -12,7 +12,8 @@ final class AppEnvironment {
         store = DeviceStore(sources: [
             WiredDiscovery(),
             manual,                  // wireless: user-entered IPs (mDNS-blocked fallback)
-            WirelessDiscovery(),     // wireless: mDNS/Bonjour auto-discovery
+            WirelessDiscovery(),     // wireless: mDNS/Bonjour auto-discovery (same subnet)
+            BleDiscovery(),          // wireless: BLE bootstrap (cross-subnet auto-discovery + token)
         ])
         coordinator = ConnectionCoordinator(
             tunnelFor: { kind in kind == .wired ? HdcFportTunnel() as TunnelService : DirectTunnel() as TunnelService },

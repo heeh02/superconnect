@@ -29,6 +29,10 @@ public final class Session {
         return id
     }()
 
+    /// Optional wireless proximity-pairing token (from BLE bootstrap) to present in `hello`. When set,
+    /// the tablet auto-trusts this Mac (closes the cleartext-peerId replay gap). Set before `start()`.
+    public var pairingToken: String?
+
     public var onLog: ((String) -> Void)?
     public var onConnected: (() -> Void)?        // fired after hello_ack
     public var onCapsUpdate: (([String: Any]) -> Void)?   // tablet panel caps changed (rotation/resolution)
@@ -75,7 +79,7 @@ public final class Session {
     }
 
     private func sendHello() {
-        sendControl([
+        var hello: [String: Any] = [
             "type": "hello",
             "role": role,
             "protocolVersion": 2,
@@ -87,7 +91,9 @@ public final class Session {
             "supportedRoles": ["host"],
             "desiredRole": "host",
             "caps": ["codecs": ["h264"], "maxWidth": 3840, "maxHeight": 2160, "hidpi": true],
-        ])
+        ]
+        if let token = pairingToken, !token.isEmpty { hello["pairingToken"] = token }   // BLE proximity proof
+        sendControl(hello)
     }
 
     public func sendPing() {

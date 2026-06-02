@@ -12,10 +12,14 @@ protocol ConnectionEngine: AnyObject {
     func disconnect()
     /// Adjust the encode bitrate (Mbps) of a live link. Host-only; see the default below.
     func setBitrate(_ mbps: Int)
+    /// Provide a wireless proximity-pairing token to present in the handshake (nil = none). Host-only.
+    func setPairingToken(_ token: String?)
 }
 
 extension ConnectionEngine {
     /// Default: ignore — only a host engine encodes. The `ReceiverConnection` stub inherits this,
     /// so the symmetric-future engines need no edit; `HostConnection` overrides it.
     func setBitrate(_ mbps: Int) {}
+    /// Default: ignore — only the host presents a pairing token in its `hello`.
+    func setPairingToken(_ token: String?) {}
 }

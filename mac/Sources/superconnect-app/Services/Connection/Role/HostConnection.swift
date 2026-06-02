@@ -17,6 +17,7 @@ final class HostConnection: ConnectionEngine {
 
     private var bitrateMbps = 50
     private let maxFps = 120
+    private var pairingToken: String?   // wireless BLE proximity token to present in hello (nil = none)
 
     private var host = "127.0.0.1"
     private var port: UInt16 = 8888
@@ -98,6 +99,12 @@ final class HostConnection: ConnectionEngine {
         }
     }
 
+    /// Provide the wireless BLE proximity token to present in the next `hello` (nil = none). Read by
+    /// openSession when building the Session; set by the coordinator before connect. Satisfies `ConnectionEngine`.
+    func setPairingToken(_ token: String?) {
+        lifeQ.async { self.pairingToken = token }
+    }
+
     /// Live bitrate change (clamped 10–100 Mbps). Retunes the running encoder immediately AND is read
     /// by the next buildProducer, so a reconnect/rotation re-applies it. Satisfies `ConnectionEngine`.
     func setBitrate(_ mbps: Int) {
@@ -119,6 +126,7 @@ final class HostConnection: ConnectionEngine {
         guard running, gen == generation else { return }
         let transport = TcpTransport(host: host, port: port)
         let session = Session(transport: transport, role: "mac")
+        session.pairingToken = self.pairingToken   // BLE proximity token (nil for wired/mDNS/manual)
         self.transport = transport
         self.session = session
 

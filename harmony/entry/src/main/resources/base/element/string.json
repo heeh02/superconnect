@@ -11,6 +11,10 @@
     {
       "name": "EntryAbility_label",
       "value": "label"
+    },
+    {
+      "name": "bluetooth_reason",
+      "value": "通过蓝牙发现并安全配对同一 Wi‑Fi 下的 Mac（仅交换连接信息，不传输音视频）"
     }
   ]
 }

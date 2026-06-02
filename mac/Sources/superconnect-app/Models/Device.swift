@@ -16,4 +16,8 @@ struct Device: Identifiable, Hashable {
     var capabilities: RoleCapabilities
     /// How the coordinator reaches it.
     var endpoint: Endpoint
+    /// Wireless proximity-pairing token obtained over BLE (nil for wired/mDNS/manual). When present,
+    /// the Mac presents it in the Wi-Fi `hello` and the tablet auto-trusts this Mac (closes the
+    /// cleartext-peerId replay gap). Orthogonal to `endpoint`, like `capabilities`.
+    var pairingToken: String? = nil
 }

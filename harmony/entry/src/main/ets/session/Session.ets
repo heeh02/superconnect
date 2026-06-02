@@ -51,6 +51,7 @@ interface ControlMsg {
   desiredRole?: string;
   appVersion?: string;
   message?: string;      // error: human/machine-readable reason (e.g. "pairing_rejected")
+  pairingToken?: string; // BLE-delivered proximity token (Mac→Pad in hello); auto-trusts if it matches
 }
 
 // Stable peer id for the v2 handshake. Per-process for now; TODO: persist across launches via
@@ -76,8 +77,8 @@ export class Session {
   // Transport-assigned connection id (clientId) — the cancel owner for this session's pairing prompt.
   private ownerId: number = 0;
   // Wireless TOFU gate (set by the transport when wireless is on). Given (peerId, deviceName,
-  // isLocalhost, ownerId), resolves true to allow the handshake. Null ⇒ no gate (wired) ⇒ always allow.
-  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number) => Promise<boolean>) | null = null;
+  // isLocalhost, ownerId, token), resolves true to allow the handshake. Null ⇒ no gate (wired) ⇒ allow.
+  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string) => Promise<boolean>) | null = null;
 
   /** Called by the transport once the client's remote address resolves (always, even on error). */
   setClientLocalhost(v: boolean): void {
@@ -92,7 +93,7 @@ export class Session {
   setOwnerId(id: number): void { this.ownerId = id; }
 
   /** Install the wireless pairing gate (the transport does this per connection when wireless is on). */
-  setPairingGate(fn: (peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number) => Promise<boolean>): void {
+  setPairingGate(fn: (peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string) => Promise<boolean>): void {
     this.pairingGate = fn;
   }
 
@@ -233,7 +234,7 @@ export class Session {
       await this.awaitClientInfo();   // ensure localhost-vs-LAN is known before deciding
       let allowed: boolean = false;
       try {
-        allowed = await this.pairingGate(this.peerId, deviceName, this.clientLocalhost, this.ownerId);
+        allowed = await this.pairingGate(this.peerId, deviceName, this.clientLocalhost, this.ownerId, msg.pairingToken ?? '');
       } catch (e) {
         this.log('pairing gate error ' + JSON.stringify(e));
         allowed = false;

@@ -22,8 +22,8 @@ export class AppEnvironment {
     const receiver: ReceiverConnection = new ReceiverConnection(
       port,
       (): string => this.wireless.bindAddress(),
-      (peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number): Promise<boolean> =>
-        this.wireless.evaluatePairing(peerId, deviceName, isLocalhost, ownerId),
+      (peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string): Promise<boolean> =>
+        this.wireless.evaluatePairing(peerId, deviceName, isLocalhost, ownerId, token),
       (address: string, listenPort: number): void => this.wireless.onListening(address, listenPort),
       (ownerId: number): void => this.wireless.cancelPairing(ownerId),
     );

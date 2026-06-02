@@ -26,6 +26,8 @@
     <string>Superconnect captures your Mac screen to stream it to the tablet.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Superconnect 通过本地网络发现并连接同一 Wi‑Fi 下的平板（无线投屏）。</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Superconnect 通过蓝牙发现并配对附近的平板（仅交换 Wi‑Fi 连接信息，不传输音视频）。</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_superconnect._tcp</string>
