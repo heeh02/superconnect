@@ -3,29 +3,26 @@ import Combine
 import CoreBluetooth
 
 /// WIRELESS discovery over BLE (v0.2.2) — the SUBNET-INDEPENDENT path. On a big routed Wi-Fi the Mac
-/// and tablet often land on different subnets, where mDNS multicast can't reach (so `WirelessDiscovery`
-/// finds nothing) even though the IP route works. BLE is proximity-based, not subnet-bound: the tablet
-/// advertises a custom GATT service; this central scans by that service UUID, connects, reads a compact
-/// JSON blob `{n,ip,p,tok,pid}`, and publishes a `.wireless` Device with the resolved `.tcp(host,port)`
-/// + the proximity `pairingToken`. Connecting then reuses the EXISTING path (DirectTunnel → TcpTransport
-/// → HostConnection) — BLE carries ONLY bootstrap metadata, never video/input.
+/// and tablet often land on different subnets where mDNS multicast can't reach (so `WirelessDiscovery`
+/// finds nothing) even though the IP route works. The tablet BROADCASTS its bootstrap payload
+/// {ipv4, port, token} in the BLE advertisement (manufacturer data); this central reads it straight
+/// from the scan — NO GATT connection (macOS↔HarmonyOS GATT connect proved unreliable on-device).
+/// It publishes a `.wireless` Device with `.tcp(host,port)` + the proximity `pairingToken`; connecting
+/// reuses the EXISTING path (DirectTunnel → TcpTransport → HostConnection). BLE carries ONLY bootstrap.
 ///
 /// Requires `NSBluetoothAlwaysUsageDescription` in Info.plist; the one-time Bluetooth permission
 /// persists across rebuilds via the app's stable self-signed identity (like Screen Recording).
-/// UUIDs MUST match the tablet (BleAdvertiser.ets).
+/// Manufacturer id + payload layout MUST match the tablet (BleAdvertiser.ets).
 final class BleDiscovery: NSObject, DeviceDiscovery {
     let kind: TransportKind = .wireless
 
-    private static let serviceUUID = CBUUID(string: "53430001-5343-4f4e-4e45-435400000001")
-    private static let charUUID = CBUUID(string: "53430002-5343-4f4e-4e45-435400000001")
+    private static let mfrID: UInt16 = 0x05C0   // private manufacturer id tagging our advert
 
     private let subject = CurrentValueSubject<[Device], Never>([])
     private let bleQueue = DispatchQueue(label: "sc.ble.discovery")
     private var central: CBCentralManager?
     private var wantScan = false
-    /// Peripherals we're mid-resolve on, retained so iOS/macOS doesn't drop the connection (by id).
-    private var connecting: [UUID: CBPeripheral] = [:]
-    /// Resolved devices keyed by the tablet's peerId (`pid`) so re-reads dedupe cleanly.
+    /// Resolved devices keyed by the peripheral identity (stable per-Mac) so re-reads dedupe.
     private var found: [String: Device] = [:]
 
     var devices: AnyPublisher<[Device], Never> { subject.eraseToAnyPublisher() }
@@ -35,8 +32,7 @@ final class BleDiscovery: NSObject, DeviceDiscovery {
             guard let self else { return }
             self.wantScan = true
             if self.central == nil {
-                // Creating the manager triggers the one-time Bluetooth permission prompt.
-                self.central = CBCentralManager(delegate: self, queue: self.bleQueue)
+                self.central = CBCentralManager(delegate: self, queue: self.bleQueue)   // triggers BT permission prompt
             } else if self.central?.state == .poweredOn {
                 self.beginScan()
             }
@@ -48,8 +44,6 @@ final class BleDiscovery: NSObject, DeviceDiscovery {
             guard let self else { return }
             self.wantScan = false
             self.central?.stopScan()
-            self.connecting.values.forEach { self.central?.cancelPeripheralConnection($0) }
-            self.connecting.removeAll()
             self.found.removeAll()
             self.subject.send([])
         }
@@ -58,81 +52,62 @@ final class BleDiscovery: NSObject, DeviceDiscovery {
     // MARK: - internals (all on bleQueue)
 
     private func beginScan() {
-        central?.scanForPeripherals(withServices: [BleDiscovery.serviceUUID],
+        diag("scan start (auth=\(CBManager.authorization.rawValue))")
+        // Scan ALL devices and filter by our manufacturer id — robust regardless of which advert
+        // packet carries the service UUID. allowDuplicates off: one callback per advert change.
+        central?.scanForPeripherals(withServices: nil,
                                     options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
     }
 
     private func publish() { subject.send(Array(found.values).sorted { $0.name < $1.name }) }
+
+    /// Parse our manufacturer data `[id-LE(2)][ipv4(4)][port-BE(2)][token(8)]` → a `.wireless` Device.
+    private static func device(from mfr: Data, name: String?, peripheralId: UUID) -> Device? {
+        let b = [UInt8](mfr)
+        guard b.count >= 2 + 14 else { return nil }
+        let company = UInt16(b[0]) | (UInt16(b[1]) << 8)
+        guard company == mfrID else { return nil }
+        let p = Array(b[2...])
+        let ip = "\(p[0]).\(p[1]).\(p[2]).\(p[3])"
+        let port = (UInt16(p[4]) << 8) | UInt16(p[5])
+        guard port != 0, p[0] != 0 else { return nil }
+        let token = p[6..<14].map { String(format: "%02x", $0) }.joined()
+        let display = (name?.isEmpty == false) ? name! : ip
+        return Device(id: "ble:\(peripheralId.uuidString)", name: display, transport: .wireless,
+                      capabilities: .canReceive, endpoint: .tcp(host: ip, port: port),
+                      pairingToken: token.isEmpty ? nil : token)
+    }
+
+    /// Append a diagnostic line to /tmp/sc-mac-diag.log (shared with HostConnection). Self-bounding.
+    func diag(_ s: String) {
+        let path = "/tmp/sc-mac-diag.log"
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           let size = attrs[.size] as? Int, size > 256 * 1024 {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+        if let h = FileHandle(forWritingAtPath: path) {
+            h.seekToEndOfFile()
+            if let d = ("BLE: " + s + "\n").data(using: .utf8) { h.write(d) }
+            try? h.close()
+        }
+    }
 }
 
 extension BleDiscovery: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        switch central.state {
-        case .poweredOn:
-            if wantScan { beginScan() }
-        case .unauthorized, .poweredOff, .unsupported, .resetting, .unknown:
-            // No access / radio off — wireless still works via mDNS / manual IP. Surface nothing here.
-            break
-        @unknown default:
-            break
-        }
+        diag("central state=\(central.state.rawValue) auth=\(CBManager.authorization.rawValue) wantScan=\(wantScan)")
+        if central.state == .poweredOn, wantScan { beginScan() }
+        // .unauthorized / .poweredOff → wireless still works via mDNS / manual IP. Nothing to surface here.
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        guard connecting[peripheral.identifier] == nil else { return }
-        connecting[peripheral.identifier] = peripheral   // retain across the async connect
-        central.connect(peripheral, options: nil)
-    }
-
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        peripheral.delegate = self
-        peripheral.discoverServices([BleDiscovery.serviceUUID])
-    }
-
-    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        connecting[peripheral.identifier] = nil
-    }
-
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        connecting[peripheral.identifier] = nil
-    }
-}
-
-extension BleDiscovery: CBPeripheralDelegate {
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard error == nil, let service = peripheral.services?.first(where: { $0.uuid == BleDiscovery.serviceUUID }) else {
-            central?.cancelPeripheralConnection(peripheral); return
-        }
-        peripheral.discoverCharacteristics([BleDiscovery.charUUID], for: service)
-    }
-
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard error == nil, let ch = service.characteristics?.first(where: { $0.uuid == BleDiscovery.charUUID }) else {
-            central?.cancelPeripheralConnection(peripheral); return
-        }
-        peripheral.readValue(for: ch)   // CoreBluetooth does the ATT long-read; full value arrives below
-    }
-
-    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        defer { central?.cancelPeripheralConnection(peripheral) }   // transient: we have what we need
-        guard error == nil, let data = characteristic.value,
-              let device = BleDiscovery.device(from: data) else { return }
+        guard let mfr = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
+              let device = BleDiscovery.device(from: mfr, name: peripheral.name, peripheralId: peripheral.identifier)
+        else { return }
+        if found[device.id] == nil { diag("read OK \(device.name) \(device.endpoint) tok=\(device.pairingToken != nil)") }
         found[device.id] = device
         publish()
-    }
-
-    /// Parse the bootstrap blob `{n,ip,p,tok,pid}` into a `.wireless` Device dialed via `.tcp(host,port)`.
-    private static func device(from data: Data) -> Device? {
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let ip = obj["ip"] as? String, !ip.isEmpty,
-              let port = (obj["p"] as? NSNumber)?.uint16Value, port != 0
-        else { return nil }
-        let name = (obj["n"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? ip
-        let pid = (obj["pid"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "\(ip):\(port)"
-        let token = (obj["tok"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        return Device(id: "ble:\(pid)", name: name, transport: .wireless,
-                      capabilities: .canReceive, endpoint: .tcp(host: ip, port: port),
-                      pairingToken: token)
     }
 }

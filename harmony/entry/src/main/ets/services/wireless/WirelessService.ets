@@ -89,7 +89,7 @@ export class WirelessService {
       hilog.warn(0x0, 'SCDIAG', 'wireless prefs load failed %{public}s', JSON.stringify(e));
     }
     if (this.blePeerId.length === 0) { this.blePeerId = util.generateRandomUUID(true); }
-    if (this.enabledFlag) { this.bleToken = util.generateRandomUUID(true); }   // mint for a persisted-ON start
+    if (this.enabledFlag) { this.bleToken = this.gen16Hex(); }   // mint for a persisted-ON start
   }
 
   /** AppEnvironment supplies the rebind action (receiver.restart) so toggling takes effect live. */
@@ -117,9 +117,9 @@ export class WirelessService {
     }
   }
 
-  /** Request BLE permission (once) then advertise the bootstrap GATT service. mDNS works regardless. */
+  /** Request BLE permission (once) then advertise the bootstrap payload. mDNS works regardless. */
   private startBle(): void {
-    if (this.btGranted) { this.bleAdvertiser.start((): Uint8Array => this.bleBlob()); return; }
+    if (this.btGranted) { this.bleAdvertiser.advertise(this.blePayload()); return; }
     try {
       const atm: abilityAccessCtrl.AtManager = abilityAccessCtrl.createAtManager();
       atm.requestPermissionsFromUser(this.ctx, ['ohos.permission.ACCESS_BLUETOOTH'])
@@ -127,7 +127,7 @@ export class WirelessService {
           const ok: boolean = res.authResults.length > 0 && res.authResults[0] === 0;
           this.btGranted = ok;
           if (ok && this.enabledFlag) {
-            this.bleAdvertiser.start((): Uint8Array => this.bleBlob());
+            this.bleAdvertiser.advertise(this.blePayload());
           } else {
             hilog.warn(0x0, 'SCDIAG', 'BLE permission not granted (mDNS/manual still work)');
           }
@@ -138,14 +138,25 @@ export class WirelessService {
     }
   }
 
-  /** The current bootstrap blob (UTF‑8 JSON) the GATT characteristic returns — fresh ip/port/token. */
-  private bleBlob(): Uint8Array {
-    const json: string = '{"n":' + JSON.stringify(deviceDisplayName())
-      + ',"ip":' + JSON.stringify(this.wifiIpv4())
-      + ',"p":' + this.listenPort
-      + ',"tok":' + JSON.stringify(this.bleToken)
-      + ',"pid":' + JSON.stringify(this.blePeerId) + '}';
-    return new util.TextEncoder().encodeInto(json);
+  /** The 14-byte BLE advertisement payload: ipv4(4) + port(2, big-endian) + token(8). The Mac reads
+   *  this straight from the scan (no GATT connect). Token is 16 hex chars → 8 bytes. */
+  private blePayload(): Uint8Array {
+    const buf: Uint8Array = new Uint8Array(14);
+    const parts: string[] = this.wifiIpv4().split('.');
+    for (let i = 0; i < 4; i++) {
+      buf[i] = parts.length === 4 ? (parseInt(parts[i], 10) & 0xff) : 0;
+    }
+    buf[4] = (this.listenPort >> 8) & 0xff;   // port big-endian
+    buf[5] = this.listenPort & 0xff;
+    for (let i = 0; i < 8; i++) {              // token: 16 hex chars → 8 bytes
+      buf[6 + i] = parseInt(this.bleToken.substring(i * 2, i * 2 + 2), 16) & 0xff;
+    }
+    return buf;
+  }
+
+  /** A 16-hex-char (8-byte) token for the BLE advert (small enough to fit; matched in evaluatePairing). */
+  private gen16Hex(): string {
+    return util.generateRandomUUID(false).split('-').join('').substring(0, 16);
   }
 
   /** The actual bound listen port (0 until the first listen succeeds). Shown in the UI. */
@@ -156,7 +167,7 @@ export class WirelessService {
     this.enabledFlag = v;
     if (v) {
       this.sessionDenied = [];                          // re-enabling → fresh prompt for denied peers
-      this.bleToken = util.generateRandomUUID(true);    // rotate the proximity token per enable
+      this.bleToken = this.gen16Hex();    // rotate the proximity token per enable
     }
     if (this.prefs !== null) {
       try {
@@ -178,9 +189,9 @@ export class WirelessService {
       const ip: number = wifiManager.getIpInfo().ipAddress;
       if (ip === 0) { return ''; }
       hilog.info(0x0, 'SCDIAG', 'wifi ipAddress raw=%{public}d', ip);
-      // HarmonyOS returns the IPv4 as a host-order int (little-endian, like Android WifiInfo) —
-      // low byte first. (Logged raw above so byte order is verifiable on-device.)
-      return `${ip & 0xff}.${(ip >> 8) & 0xff}.${(ip >> 16) & 0xff}.${(ip >> 24) & 0xff}`;
+      // HarmonyOS returns the IPv4 as a BIG-endian host-order int (raw 0x0A0845B9 = 10.8.69.185),
+      // MSB first. (Verified on-device against ifconfig; an earlier little-endian guess reversed it.)
+      return `${(ip >> 24) & 0xff}.${(ip >> 16) & 0xff}.${(ip >> 8) & 0xff}.${ip & 0xff}`;
     } catch (e) {
       hilog.warn(0x0, 'SCDIAG', 'wifiIpv4 failed %{public}s', JSON.stringify(e));
       return '';
