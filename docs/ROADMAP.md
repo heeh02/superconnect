@@ -67,8 +67,13 @@
 - **设备适配（任意华为平板）**：平板握手时上报 caps（`screenWidth/Height`、`refreshRate`、`scale`、`codecs`、`pen`、`hdr`；`session/Session.ets`）；Mac 据此**动态**创建虚拟屏（`HostConnection.displayConfig` → `CGVirtualDisplay`，`VirtualDisplay.ets` 按 config 建模）——任意分辨率 / 刷新率自适应，长边按编码器上限裁剪、强制偶数像素。**换一台华为平板无需改代码。**
 - **约束 / to-do**：平板需 **HarmonyOS NEXT（API 12+）**（应用为 NEXT HAP，旧版 HarmonyOS 4.x 装不上）；**多机并存已支持**（Mac 同时作多台平板的副屏，连接层 `deviceID` 注册表，#51；线协议零改动）。**旋转 / 分辨率中途变化已支持自动重协商**（平板侧 `Session` 监听 `display.on('change')`、去抖去重后发 `caps_update` → Mac `HostConnection.reconfigure` 重建虚拟屏 + 解码器按新分辨率重启，#58）。
 
-### v0.2.1 — 无线连接（Wi‑Fi LAN）✅（dev，待设备验证）
+### v0.2 — 无线连接（Wi‑Fi LAN）✅ 真机验证通过（2026-06-02）
 **目标**：平板作为 Mac 的**无线**扩展屏，无需数据线；作为**独立模块**与有线路径解耦（关掉无线时有线行为逐字节不变）。
+- **状态**：无线投屏在真机上基本可用（A 验证通过）；连接超时未复现（VPN/EasyConnect 抗劫持 = done）。
+- **有线+无线单连接仲裁**（同一平板不可同时被两种传输占用）：平板侧单活守卫（拒绝第二客户端，发 `session_busy`）+ Mac 侧按 `peerId` 全量去重（保留最早、其余 `.blocked`「已被占用」）；状态信号改为类型化 `ServerStatus` 枚举，修掉"拒绝第二连接连带掐键盘/触控"的跨模块耦合。见 `docs/CONFLICTS.md`。
+- **多卡合并（B）**：同一平板同时经 BLE + mDNS（+ 手动 IP）发现时，按 `host:port` 合并为**一张无线卡**（代表卡 id 稳定、携带 BLE 自动信任 token + 真实名）；有线卡保持独立（hdc 序列号与 LAN IP 无法在连接前可靠关联）。`DeviceStore.collapseWireless`。
+- **UI**：圆点/传输徽章按连接状态着色 —— 蓝=可连接、绿=已连接、灰=已被占用。
+- **下期（C / Phase 2，A+B 完成后开始）**：低延迟视频通道（VIDEO 走 UDP/QUIC、CONTROL+INPUT 走 TCP）+ 自适应码率分级；加密/真配对（TLS + key-based TOFU）。
 - **复用现有协议**（Phase 1，已做）：Wi‑Fi TCP，复用 `TcpTransport` + `Session` + `FrameCodec`。平板无线模式监听 `0.0.0.0:8888`（关闭时 `127.0.0.1`，仅 USB，不暴露局域网）。Mac 经 `WirelessDiscovery`（mDNS/Bonjour `_superconnect._tcp` → 解析 `host:port`）+ `ManualDiscovery`（手动输入 IP）发现，走既有 `DirectTunnel`。**线协议零改动**（仅新增 `error.message` 附加字段；一致性测试台不变通过）。
 - **安全配对（TOFU）**：陌生局域网设备首次连接需在平板上点「允许」（持久化已信任 `peerId`）；`localhost`（hdc/USB）免配对。拒绝 → 平板发 `pairing_rejected`、Mac 视为致命不重试。详见 `docs/ARCHITECTURE.md` §5 与 `docs/WIRELESS.md`。
 - **Intel**：`Resources/hdc/<arch>/` 双目录打包就绪（拿到 x86_64 hdc 直接丢入 `hdc/x86_64/`）；在此之前 Intel 走无线（免 hdc）或系统 hdc。
