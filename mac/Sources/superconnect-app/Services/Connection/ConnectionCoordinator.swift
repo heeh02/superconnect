@@ -66,6 +66,9 @@ final class ConnectionCoordinator: ObservableObject {
         let tunnel = tunnelFor(device.transport)
         let engine = engineFor(role)
         engine.setPairingToken(device.pairingToken)   // wireless BLE proximity token (nil otherwise)
+        // Wireless targets dial over the physical NIC (exclude VPN/utun) so a VPN can't hijack the LAN
+        // route; wired (hdc/loopback) keeps default routing.
+        engine.setAvoidVirtualInterfaces(device.transport == .wireless)
         let mc = ManagedConnection(device: device, engine: engine, tunnel: tunnel)
         conns[device.id] = mc
         states[device.id] = .connecting

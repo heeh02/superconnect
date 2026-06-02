@@ -18,6 +18,7 @@ final class HostConnection: ConnectionEngine {
     private var bitrateMbps = 50
     private let maxFps = 120
     private var pairingToken: String?   // wireless BLE proximity token to present in hello (nil = none)
+    private var avoidVirtualInterfaces = false   // wireless: dial over physical NIC, excluding VPN/utun
 
     private var host = "127.0.0.1"
     private var port: UInt16 = 8888
@@ -105,6 +106,12 @@ final class HostConnection: ConnectionEngine {
         lifeQ.async { self.pairingToken = token }
     }
 
+    /// For wireless/LAN targets, dial over the physical interface (exclude VPN/utun). Set by the
+    /// coordinator before connect; read by openSession. Satisfies `ConnectionEngine`.
+    func setAvoidVirtualInterfaces(_ avoid: Bool) {
+        lifeQ.async { self.avoidVirtualInterfaces = avoid }
+    }
+
     /// Live bitrate change (clamped 10–100 Mbps). Retunes the running encoder immediately AND is read
     /// by the next buildProducer, so a reconnect/rotation re-applies it. Satisfies `ConnectionEngine`.
     func setBitrate(_ mbps: Int) {
@@ -124,7 +131,7 @@ final class HostConnection: ConnectionEngine {
     /// MUST run on lifeQ.
     private func openSession(generation gen: Int) {
         guard running, gen == generation else { return }
-        let transport = TcpTransport(host: host, port: port)
+        let transport = TcpTransport(host: host, port: port, avoidVirtualInterfaces: self.avoidVirtualInterfaces)
         let session = Session(transport: transport, role: "mac")
         session.pairingToken = self.pairingToken   // BLE proximity token (nil for wired/mDNS/manual)
         self.transport = transport

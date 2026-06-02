@@ -14,6 +14,9 @@ protocol ConnectionEngine: AnyObject {
     func setBitrate(_ mbps: Int)
     /// Provide a wireless proximity-pairing token to present in the handshake (nil = none). Host-only.
     func setPairingToken(_ token: String?)
+    /// For WIRELESS/LAN targets: dial over the physical interface, excluding virtual (VPN/utun) ones,
+    /// so a VPN like EasyConnect can't hijack the LAN route. Off for wired (loopback). Host-only.
+    func setAvoidVirtualInterfaces(_ avoid: Bool)
 }
 
 extension ConnectionEngine {
@@ -22,4 +25,6 @@ extension ConnectionEngine {
     func setBitrate(_ mbps: Int) {}
     /// Default: ignore — only the host presents a pairing token in its `hello`.
     func setPairingToken(_ token: String?) {}
+    /// Default: ignore — only the host dials out (and so cares about interface selection).
+    func setAvoidVirtualInterfaces(_ avoid: Bool) {}
 }
