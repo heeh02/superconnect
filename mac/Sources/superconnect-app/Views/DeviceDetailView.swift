@@ -88,7 +88,7 @@ struct DeviceDetailView: View {
                 HStack(spacing: 8) {
                     StatusDot(state: deviceState)
                     Text(stateText).font(.subheadline).foregroundStyle(.secondary)
-                    TransportBadge(kind: device.transport)
+                    TransportBadge(kind: device.transport, connected: deviceState.isConnected)
                 }
             }
             Spacer()

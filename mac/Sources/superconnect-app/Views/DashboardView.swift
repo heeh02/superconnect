@@ -106,7 +106,7 @@ private struct SidebarRow: View {
             StatusDot(state: state)
             Text(name).fontWeight(.medium).lineLimit(1)
             Spacer()
-            TransportBadge(kind: device.transport)
+            TransportBadge(kind: device.transport, connected: state.isConnected)
         }
         .padding(.vertical, 4)
     }
