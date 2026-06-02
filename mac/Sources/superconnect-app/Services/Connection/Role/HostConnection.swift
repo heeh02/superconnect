@@ -145,6 +145,7 @@ final class HostConnection: ConnectionEngine {
             guard let self, let session else { return }
             self.lifeQ.async {
                 guard self.running, gen == self.generation else { return }
+                self.tele.deviceName = session.peerDeviceName   // surface the real name (wired card too)
                 self.buildPipeline(caps: session.peerCaps, gen: gen)
             }
         }

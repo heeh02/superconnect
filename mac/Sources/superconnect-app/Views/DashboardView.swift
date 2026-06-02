@@ -40,7 +40,7 @@ struct DashboardView: View {
                     get: { vm.selectedDeviceID },
                     set: { if let id = $0 { vm.select(id) } }   // routes through the mid-connection guard
                 )) { device in
-                    SidebarRow(device: device, state: vm.state(for: device.id))
+                    SidebarRow(device: device, name: vm.displayName(for: device), state: vm.state(for: device.id))
                         .contextMenu {
                             if vm.isManualWireless(device.id) {
                                 Button("移除此无线设备", role: .destructive) {
@@ -97,12 +97,13 @@ struct DashboardView: View {
 /// One slim sidebar row: live dot + name + wired/wireless badge.
 private struct SidebarRow: View {
     let device: Device
+    let name: String
     let state: ConnectionState
 
     var body: some View {
         HStack(spacing: 10) {
             StatusDot(state: state)
-            Text(device.name).fontWeight(.medium).lineLimit(1)
+            Text(name).fontWeight(.medium).lineLimit(1)
             Spacer()
             TransportBadge(kind: device.transport)
         }

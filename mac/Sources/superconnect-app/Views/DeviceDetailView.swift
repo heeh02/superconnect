@@ -77,14 +77,14 @@ struct DeviceDetailView: View {
             .frame(maxWidth: 560, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .navigationTitle(device.name)
+        .navigationTitle(vm.displayName(for: device))
     }
 
     private var header: some View {
         HStack(spacing: 14) {
             Image(systemName: "ipad.landscape").font(.system(size: 32)).foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 5) {
-                Text(device.name).font(.title2).fontWeight(.semibold)
+                Text(vm.displayName(for: device)).font(.title2).fontWeight(.semibold)
                 HStack(spacing: 8) {
                     StatusDot(state: deviceState)
                     Text(stateText).font(.subheadline).foregroundStyle(.secondary)

@@ -56,6 +56,13 @@ final class AppViewModel: ObservableObject {
     func isConnected(_ id: String) -> Bool { state(for: id).isConnected }
     func isBusy(_ id: String) -> Bool { state(for: id).isBusy }
 
+    /// The name to show for a device: the real name reported in the handshake (e.g. "HUAWEI MatePad Pro")
+    /// once connected, else the discovery name (hdc serial for wired, mDNS/BLE name for wireless).
+    func displayName(for device: Device) -> String {
+        if let n = telemetry(for: device.id)?.deviceName, !n.isEmpty { return n }
+        return device.name
+    }
+
     // Derived, read-only conveniences.
     var selectedDevice: Device? { devices.first { $0.id == selectedDeviceID } }
     /// Devices currently connected or connecting.
