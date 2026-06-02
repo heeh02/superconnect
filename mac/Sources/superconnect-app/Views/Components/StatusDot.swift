@@ -6,11 +6,11 @@ struct StatusDot: View {
 
     private var color: Color {
         switch state {
-        case .connected:                     return .green
-        case .connecting:                    return .orange
+        case .connected:                     return .green       // 已连接
+        case .connecting:                    return .orange      // 连接中
         case .needsPermission, .failed:      return .red
-        case .blocked:                       return .orange
-        case .idle:                          return .secondary
+        case .blocked:                       return .gray        // 被占用 / 不可连接
+        case .idle:                          return .blue        // 可连接（已发现，未连接）
         }
     }
 

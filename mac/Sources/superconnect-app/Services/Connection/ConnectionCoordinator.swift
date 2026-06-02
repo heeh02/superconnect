@@ -40,11 +40,14 @@ final class ConnectionCoordinator: ObservableObject {
         /// Used for Tier-2 reconciliation of the wired+wireless duplicate the connect-time policy can't
         /// pre-detect.
         var peerID: String?
-        init(device: Device, engine: ConnectionEngine, tunnel: TunnelService) {
-            self.device = device; self.engine = engine; self.tunnel = tunnel
+        /// Monotonic connect order — the single-active sweep keeps the EARLIEST link per peer.
+        let startSeq: Int
+        init(device: Device, engine: ConnectionEngine, tunnel: TunnelService, startSeq: Int) {
+            self.device = device; self.engine = engine; self.tunnel = tunnel; self.startSeq = startSeq
         }
     }
     private var conns: [String: ManagedConnection] = [:]
+    private var connectSeq = 0
 
     init(tunnelFor: @escaping TunnelFactory, engineFor: @escaping RoleFactory, policy: ConnectionPolicy) {
         self.tunnelFor = tunnelFor
@@ -66,11 +69,13 @@ final class ConnectionCoordinator: ObservableObject {
     /// other connection — no longer tears anything else down.
     func connect(_ device: Device, as role: Role = .host) {
         guard conns[device.id] == nil else { return }
+        diag("connect id=\(device.id) transport=\(device.transport) endpoint=\(device.endpoint)")
 
         // Cross-device conflict gate: refuse a connection to a physical tablet that already has a live
         // link (e.g. the same tablet shown as a second wireless card). SOFT — it only blocks a provable
         // same-device duplicate; distinct tablets always pass, so one Mac → many tablets is unaffected.
         if case .refuse(let reason) = policy.admit(device, against: liveLinkInfos()) {
+            diag("admit REFUSED id=\(device.id) (\(reason)) — already connected to this tablet")
             states[device.id] = .blocked(reason)
             return
         }
@@ -86,7 +91,8 @@ final class ConnectionCoordinator: ObservableObject {
         // Wireless targets dial over the physical NIC (exclude VPN/utun) so a VPN can't hijack the LAN
         // route; wired (hdc/loopback) keeps default routing.
         engine.setAvoidVirtualInterfaces(device.transport == .wireless)
-        let mc = ManagedConnection(device: device, engine: engine, tunnel: tunnel)
+        connectSeq += 1
+        let mc = ManagedConnection(device: device, engine: engine, tunnel: tunnel, startSeq: connectSeq)
         conns[device.id] = mc
         states[device.id] = .connecting
 
@@ -99,12 +105,17 @@ final class ConnectionCoordinator: ObservableObject {
             .sink { [weak self, weak mc] t in
                 guard let self else { return }
                 self.telemetry[device.id] = t
-                // Tier-2: capture the peer's confirmed cross-transport identity (from hello_ack) and, if
-                // it duplicates another live link, reconcile (tear down this newcomer). weak mc so the
-                // subscription stored in mc.bag doesn't retain-cycle the connection.
+                // Tier-2: capture the peer's confirmed cross-transport identity (from hello_ack). Once
+                // known, run the single-active sweep so the same physical tablet can't stay connected
+                // over two transports. weak mc so the subscription in mc.bag doesn't retain-cycle the link.
                 if let mc, let pid = t.peerId, !pid.isEmpty, mc.peerID != pid {
                     mc.peerID = pid
-                    self.reconcile(confirmed: mc, peerID: pid)
+                    self.diag("peerId for id=\(device.id) = \(pid)")
+                    self.enforceSingleActivePerPeer()
+                } else if let mc, mc.peerID == nil, (t.peerId ?? "").isEmpty, t.resolution != "—" {
+                    // Streaming but NO peerId arrived — log it: this is exactly the case that would
+                    // defeat peer-based dedup (a tablet build not sending peerId in hello_ack).
+                    self.diag("WARN id=\(device.id) streaming with EMPTY peerId — dedup can't match")
                 }
             }
             .store(in: &mc.bag)
@@ -159,17 +170,39 @@ final class ConnectionCoordinator: ObservableObject {
         }
     }
 
-    /// Tier-2 conflict resolution. Once a link's cross-transport `peerId` is confirmed, if ANOTHER live
-    /// link already carries the same `peerId` they are the same physical tablet reached two ways (the
-    /// wired+wireless duplicate the connect-time policy can't see across the serial/host namespace gap).
-    /// Keep the incumbent, tear down this newcomer with `.blocked`. Belt-and-suspenders for the tablet's
-    /// own single-active guard (and a safety net for an older tablet lacking it). Main-thread only.
-    private func reconcile(confirmed mc: ManagedConnection, peerID: String) {
-        let dupID = mc.device.id
-        for other in conns.values where other !== mc && other.peerID == peerID {
-            disconnect(deviceID: dupID)                       // clears states/telemetry/conns for dupID
-            states[dupID] = .blocked(.alreadyConnectedElsewhere)
-            return
+    /// Tier-2 single-active enforcement. Once links report their cross-transport `peerId` (from
+    /// hello_ack), at most ONE live link may exist per physical tablet. Group live links by `peerID`,
+    /// keep the EARLIEST (incumbent), and tear down every later duplicate with `.blocked`. A full sweep
+    /// (not pairwise) so it converges no matter the order peerIds arrive. This is the authoritative
+    /// dedup for the wired+wireless-same-tablet case the connect-time policy can't pre-detect across the
+    /// serial/host namespace gap. Main-thread only. See docs/CONFLICTS.md.
+    private func enforceSingleActivePerPeer() {
+        var keep: [String: ManagedConnection] = [:]   // peerID → earliest live link
+        for mc in conns.values.sorted(by: { $0.startSeq < $1.startSeq }) {
+            guard let pid = mc.peerID, !pid.isEmpty else { continue }
+            if let held = keep[pid] {
+                let dup = mc.device.id
+                diag("dedupe: block id=\(dup) — same tablet (peer \(pid)) already held by id=\(held.device.id)")
+                disconnect(deviceID: dup)                     // clears conns/states/telemetry for dup
+                states[dup] = .blocked(.alreadyConnectedElsewhere)
+            } else {
+                keep[pid] = mc
+            }
+        }
+    }
+
+    /// Append a diagnostic line to /tmp/sc-mac-diag.log (shared with HostConnection/BLE/TCP). Self-bounding.
+    private func diag(_ s: String) {
+        let path = "/tmp/sc-mac-diag.log"
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           let size = attrs[.size] as? Int, size > 256 * 1024 {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+        if let h = FileHandle(forWritingAtPath: path) {
+            h.seekToEndOfFile()
+            if let d = ("COORD: " + s + "\n").data(using: .utf8) { h.write(d) }
+            try? h.close()
         }
     }
 

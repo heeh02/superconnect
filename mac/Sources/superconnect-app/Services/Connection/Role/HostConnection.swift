@@ -154,6 +154,7 @@ final class HostConnection: ConnectionEngine {
                 self.consecutiveTimeouts = 0   // a real connection landed → streak broken
                 self.tele.deviceName = session.peerDeviceName   // surface the real name (wired card too)
                 self.tele.peerId = session.peerId               // cross-transport id for conflict reconcile
+                self.diag("handshake done host=\(self.host) peerId=\(session.peerId ?? "<nil>") name=\(session.peerDeviceName ?? "<nil>")")
                 self.buildPipeline(caps: session.peerCaps, gen: gen)
             }
         }
