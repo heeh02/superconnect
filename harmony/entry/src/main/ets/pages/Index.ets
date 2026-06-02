@@ -46,6 +46,7 @@ struct Index {
   @State private pairingVisible: boolean = false;   // TOFU prompt showing?
   @State private pairingName: string = '';          // the requesting Mac's name (for the prompt)
   @State private pairingPromptId: number = 0;        // id binding this dialog to its prompt (anti-swap)
+  @State private listenPort: number = 8888;          // ACTUAL bound port (8888 preferred; may fall back)
   @State private pairedPeers: TrustedPeer[] = [];            // trusted Macs (shown in the control panel)
   // Bumped by EntryAbility.onNewWant when the "exit fullscreen" notification is tapped.
   @StorageLink('scExitFullscreen') @Watch('onExitFsRequest') private exitFsReq: number = 0;
@@ -82,6 +83,10 @@ struct Index {
       this.pairingVisible = true;
     };
     this.env.wireless.onPairingDismiss = (): void => { this.pairingVisible = false; };
+    // Reflect the actual bound port (8888 preferred; falls back if occupied) into the UI.
+    this.env.wireless.onPortChange = (port: number): void => { this.listenPort = port; };
+    const p: number = this.env.wireless.currentPort();
+    if (p > 0) { this.listenPort = p; }
     mgr.onLog = (msg: string): void => { this.appendLog(msg); };
     mgr.onStatus = (s: ConnectionStatus): void => {
       this.connStatus = s;
@@ -232,7 +237,7 @@ struct Index {
         IdleView({
           statusText: statusLabel(this.connStatus),
           statusDot: statusColor(this.connStatus),
-          port: this.port,
+          port: this.listenPort,
           wirelessOn: this.wirelessOn,
           wifiIp: this.wifiIp,
           onToggleWireless: (v: boolean) => { this.setWireless(v); },
@@ -244,7 +249,7 @@ struct Index {
       if (this.showPanel) {
         ControlPanel({
           statusText: statusLabel(this.connStatus),
-          port: this.port,
+          port: this.listenPort,
           vWidth: this.vWidth,
           vHeight: this.vHeight,
           vCodec: this.vCodec,

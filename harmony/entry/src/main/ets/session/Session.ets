@@ -10,6 +10,7 @@ import { Callback } from '@ohos.base';
 import hilog from '@ohos.hilog';
 import sc from 'libsuperconnect.so';
 import { Channel, Frame, FrameDecoder, encodeFrame } from '../protocol/FrameCodec';
+import { deviceDisplayName } from '../services/DeviceIdentity';
 
 export type SendFn = (bytes: Uint8Array) => void;
 export type LogFn = (msg: string) => void;
@@ -254,7 +255,7 @@ export class Session {
       // v2 (all additive — a v1 Mac ignores these): identity + the role this side accepts.
       peerId: localPeerId(),
       platform: 'harmonyos',
-      deviceName: 'HarmonyOS Tablet',
+      deviceName: deviceDisplayName(),
       supportedRoles: ['receiver'],
       acceptedRole: 'receiver',
       caps: caps,

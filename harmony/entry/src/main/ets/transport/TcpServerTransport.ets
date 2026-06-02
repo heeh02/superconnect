@@ -22,6 +22,7 @@ export class TcpServerTransport {
   private currentSend: ((bytes: Uint8Array) => void) | null = null;
   private currentClientId: number = -1;
   private boundAddress: string = '127.0.0.1';
+  private boundPort: number = 0;   // the port actually bound (preferred, or a fallback if occupied)
   // Fired once the socket is listening (after listen succeeds). WirelessService uses this to
   // advertise over mDNS only when bound to the LAN (0.0.0.0). Null on the wired path.
   onListening: ((address: string, port: number) => void) | null = null;
@@ -51,21 +52,40 @@ export class TcpServerTransport {
 
   /**
    * Listen for the Mac. `bindAddress` is the wired/wireless seam: '127.0.0.1' (default, USB-only via
-   * hdc fport) or '0.0.0.0' (LAN + localhost, set by WirelessService when wireless is on). Nothing
-   * else about the server differs between the two — Session and above stay transport-agnostic.
+   * hdc fport) or '0.0.0.0' (LAN, set by WirelessService when wireless is on). `preferredPort` is
+   * tried first; if it's occupied on this tablet we fall back to the next free port (so a port clash
+   * with another app can't kill the listener). The ACTUAL bound port is reported via onListening —
+   * wireless (mDNS/manual) carries it automatically; wired (hdc) assumes the preferred port.
    */
-  start(port: number, bindAddress: string = '127.0.0.1'): void {
+  start(preferredPort: number, bindAddress: string = '127.0.0.1'): void {
     this.boundAddress = bindAddress;
+    const candidates: number[] = [];
+    for (let i = 0; i < 8; i++) { candidates.push(preferredPort + i); }
+    this.tryListen(bindAddress, candidates, 0);
+  }
+
+  private tryListen(bindAddress: string, ports: number[], i: number): void {
+    if (i >= ports.length) {
+      this.onStatus('listen failed');
+      this.log('listen failed: no free port in ' + ports[0] + '..' + ports[ports.length - 1]);
+      return;
+    }
+    const port: number = ports[i];
+    this.server = socket.constructTCPSocketServerInstance();   // fresh instance per attempt
     const addr: socket.NetAddress = { address: bindAddress, port: port, family: 1 };
-    this.server.listen(addr).then(() => {
+    this.server.listen(addr).then((): void => {
+      this.boundPort = port;
       this.onStatus('listening ' + bindAddress + ':' + port);
       this.log('TCP server listening on ' + bindAddress + ':' + port);
+      this.attachConnectHandler();
       if (this.onListening !== null) { this.onListening(bindAddress, port); }
-    }).catch((err: Object) => {
-      this.onStatus('listen failed');
-      this.log('listen error: ' + JSON.stringify(err));
+    }).catch((err: Object): void => {
+      this.log('listen ' + port + ' failed (' + JSON.stringify(err) + '), trying next');
+      this.tryListen(bindAddress, ports, i + 1);
     });
+  }
 
+  private attachConnectHandler(): void {
     this.server.on('connect', (client: socket.TCPSocketConnection) => {
       this.onStatus('client connected');
       this.log('client connected (id=' + client.clientId + ')');

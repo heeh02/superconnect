@@ -17,11 +17,11 @@ import hilog from '@ohos.hilog';
 import { common } from '@kit.AbilityKit';
 import { PairingStore, TrustedPeer } from './PairingStore';
 import { MdnsAdvertiser } from './MdnsAdvertiser';
+import { deviceDisplayName } from '../DeviceIdentity';
 
 const STORE: string = 'sc_wireless';
 const KEY_ENABLED: string = 'enabled';
 const PAIR_TIMEOUT_MS: number = 60000;   // auto-reject an unanswered pairing prompt after 60s
-const SERVICE_NAME: string = 'Superconnect Pad';   // mDNS service name (shown as the device on the Mac)
 
 export class WirelessService {
   private prefs: preferences.Preferences | null = null;
@@ -52,6 +52,10 @@ export class WirelessService {
   // UI hooks (the page shows/hides the 允许/拒绝 dialog). promptId binds the dialog to its prompt.
   onPairingRequest: ((peerId: string, deviceName: string, promptId: number) => void) | null = null;
   onPairingDismiss: (() => void) | null = null;
+  // The port the receiver actually bound (may differ from 8888 if it was occupied). Fired on each
+  // (re)listen so the UI can show the real ip:port. 0 until the first listen succeeds.
+  private listenPort: number = 0;
+  onPortChange: ((port: number) => void) | null = null;
 
   constructor(ctx: common.UIAbilityContext) {
     this.pairing = new PairingStore(ctx);
@@ -73,16 +77,22 @@ export class WirelessService {
   bindAddress(): string { return this.enabledFlag ? '0.0.0.0' : '127.0.0.1'; }
 
   /**
-   * Called by the receiver once the socket is listening. Advertise over mDNS only when bound to the
-   * LAN (0.0.0.0); on 127.0.0.1 (wireless off / USB only) ensure no advertisement is live.
+   * Called by the receiver once the socket is listening. Records the actual bound port (for the UI),
+   * and advertises over mDNS — with the real device name + actual port — only when bound to the LAN
+   * (0.0.0.0); on 127.0.0.1 (wireless off / USB only) ensure no advertisement is live.
    */
   onListening(address: string, port: number): void {
+    this.listenPort = port;
+    if (this.onPortChange !== null) { this.onPortChange(port); }
     if (this.enabledFlag && address !== '127.0.0.1') {
-      this.advertiser.advertise(SERVICE_NAME, port);
+      this.advertiser.advertise(deviceDisplayName(), port);
     } else {
       this.advertiser.unadvertise();
     }
   }
+
+  /** The actual bound listen port (0 until the first listen succeeds). Shown in the UI. */
+  currentPort(): number { return this.listenPort; }
 
   setEnabled(v: boolean): void {
     if (v === this.enabledFlag) { return; }
