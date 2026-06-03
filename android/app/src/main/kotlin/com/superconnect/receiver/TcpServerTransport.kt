@@ -1,5 +1,7 @@
 package com.superconnect.receiver
 
+import com.superconnect.protocol.Channel
+import com.superconnect.protocol.FrameCodec
 import com.superconnect.protocol.FrameDecoder
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -21,12 +23,27 @@ class TcpServerTransport(
     private val log: (String) -> Unit = {},
 ) {
     var onFrame: ((channel: Int, flags: Int, payload: ByteArray) -> Unit)? = null
+    /** Fired on the server thread right AFTER the listen socket is bound (never if bind fails). The
+     *  wireless layer advertises over mDNS from here so it never publishes a not-yet-listening (or
+     *  failed) service. Mirrors HarmonyOS onListening. Null on the wired path. */
+    var onListening: ((address: String, port: Int) -> Unit)? = null
     var onClientChange: ((connected: Boolean) -> Unit)? = null
+
+    /** Fired when a client disconnects, with its transport-assigned [clientOwnerId]. Lets WirelessService
+     *  cancel a pairing prompt owned by a peer that went away — keyed on the (unspoofable) ownerId so only
+     *  the owning connection can clear its prompt. Null on the wired path. Mirrors HarmonyOS onClientGone. */
+    var onClientGone: ((ownerId: Int) -> Unit)? = null
 
     /** True while the connected client came in over loopback (wired / adb-forwarded). The wireless TOFU
      *  pairing gate exempts loopback and only challenges LAN clients. Set on connect, before frames flow. */
     @Volatile var clientIsLocalhost: Boolean = false
         private set
+
+    /** Identity of the current client (monotonic, transport-assigned). The pairing gate carries it so a
+     *  disconnect can cancel ONLY this connection's in-flight prompt (peerId is spoofable; this isn't). */
+    @Volatile var clientOwnerId: Int = 0
+        private set
+    private var ownerSeq = 0
 
     @Volatile private var running = false
     private var server: ServerSocket? = null
@@ -46,11 +63,12 @@ class TcpServerTransport(
             s.bind(InetSocketAddress(bindAddress, port))
             server = s
             log("listening $bindAddress:$port")
+            onListening?.invoke(bindAddress, port)   // advertise only now (bind succeeded), not before
             while (running) {
                 val sock = try { s.accept() } catch (e: Exception) { if (running) log("accept err $e"); break }
                 if (client != null) {                 // single-active: keep the incumbent, drop the newcomer
-                    log("rejecting 2nd client")
-                    try { sock.close() } catch (_: Exception) {}
+                    log("rejecting 2nd client (session_busy)")
+                    rejectBusy(sock)                   // explicit error ⇒ Mac fails fast (no reconnect storm)
                     continue
                 }
                 handleClient(sock)                     // blocks until this client goes away, then we accept again
@@ -62,12 +80,26 @@ class TcpServerTransport(
         }
     }
 
+    /** Reject a surplus client (single-active guard): send a framed `{type:error,message:session_busy}`
+     *  CONTROL frame, THEN close. The explicit error lets the Mac fail fast (HostConnection treats it
+     *  fatal — no reconnect loop) instead of treating a silent close as a drop. Mirrors HarmonyOS rejectBusy. */
+    private fun rejectBusy(sock: Socket) {
+        try {
+            val json = "{\"type\":\"error\",\"message\":\"session_busy\"}".toByteArray(Charsets.UTF_8)
+            val frame = FrameCodec.encode(Channel.CONTROL, 0, json)
+            sock.getOutputStream().apply { write(frame); flush() }
+        } catch (_: Exception) {}
+        try { sock.close() } catch (_: Exception) {}
+    }
+
     private fun handleClient(sock: Socket) {
         client = sock
+        clientOwnerId = ++ownerSeq          // single accept thread ⇒ no race; identifies THIS connection
+        val myOwner = clientOwnerId
         sock.tcpNoDelay = true
         clientIsLocalhost = sock.inetAddress?.isLoopbackAddress ?: false   // wired/adb (loopback) is pairing-exempt; LAN needs TOFU
         onClientChange?.invoke(true)
-        log("client connected ${sock.inetAddress} (localhost=$clientIsLocalhost)")
+        log("client connected ${sock.inetAddress} (localhost=$clientIsLocalhost, owner=$myOwner)")
         val decoder = FrameDecoder()
         val buf = ByteArray(64 * 1024)
         try {
@@ -84,7 +116,8 @@ class TcpServerTransport(
             try { sock.close() } catch (_: Exception) {}
             client = null
             onClientChange?.invoke(false)
-            log("client gone")
+            onClientGone?.invoke(myOwner)   // free any in-flight pairing prompt owned by this connection
+            log("client gone (owner=$myOwner)")
         }
     }
 

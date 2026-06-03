@@ -6,7 +6,8 @@ import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import java.net.Inet4Address
 import java.net.NetworkInterface
-import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 /**
@@ -35,11 +36,22 @@ class WirelessService(
     private var regListener: NsdManager.RegistrationListener? = null
     private var multicastLock: WifiManager.MulticastLock? = null
 
-    /** Set by the UI: show the 允许/拒绝 prompt for an unknown LAN Mac; the user's tap calls `resolve`. */
-    var onPairingRequest: ((peerId: String, deviceName: String, resolve: (Boolean) -> Unit) -> Unit)? = null
+    /** Set by the UI: show the 允许/拒绝 prompt for an unknown LAN Mac. `promptId` binds the dialog to
+     *  THIS prompt — the user's tap must echo it via [respondPairing] so a stale tap (its prompt already
+     *  timed out / was cancelled) can't settle a prompt that replaced it (anti-hijack, mirrors HarmonyOS). */
+    var onPairingRequest: ((peerId: String, deviceName: String, promptId: Int) -> Unit)? = null
+    /** Set by the UI: dismiss the live pairing dialog (fired on tap / timeout / owner-disconnect / teardown). */
+    var onPairingDismiss: (() -> Unit)? = null
 
     fun enabled(): Boolean = prefs.getBoolean(KEY_ENABLED, true)   // default ON: wireless is the point of the receiver
-    fun setEnabled(on: Boolean) { prefs.edit().putBoolean(KEY_ENABLED, on).apply() }
+    /** Persist the on/off choice (+ reset this-run denials). NOT yet live-applied: no settings toggle calls
+     *  this today, and MainActivity reads [bindAddress] once at onCreate — a change takes effect on next
+     *  launch. When a toggle UI lands, add a restart hook (stop+rebind transport, re-fire onListening) like
+     *  HarmonyOS setRestart/restartFn so 127.0.0.1↔0.0.0.0 + mDNS flip live. */
+    fun setEnabled(on: Boolean) {
+        prefs.edit().putBoolean(KEY_ENABLED, on).apply()
+        if (on) synchronized(lock) { sessionDenied.clear() }   // re-enabling → fresh prompt for denied peers
+    }
 
     /** '0.0.0.0' (LAN; also serves the wired adb-forwarded loopback client) when on, else loopback only. */
     fun bindAddress(): String = if (enabled()) "0.0.0.0" else "127.0.0.1"
@@ -50,10 +62,10 @@ class WirelessService(
             for (intf in NetworkInterface.getNetworkInterfaces()) {
                 if (!intf.isUp || intf.isLoopback || intf.isVirtual) continue
                 for (addr in intf.inetAddresses) {
-                    if (addr is Inet4Address && !addr.isLoopbackAddress && !addr.isLinkLocalAddress) {
-                        val ip = addr.hostAddress ?: continue
-                        if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")) return ip
-                    }
+                    // isSiteLocalAddress = exactly the RFC1918 private blocks (10/8, 172.16/12, 192.168/16)
+                    // — avoids the old startsWith("172.") over-match (172.0–15 / 172.32–255 are PUBLIC), which
+                    // could surface an undialable public 172.x as the manual-connect hint.
+                    if (addr is Inet4Address && addr.isSiteLocalAddress) return addr.hostAddress ?: continue
                 }
             }
         } catch (e: Exception) { log("wifiIp err $e") }
@@ -85,22 +97,83 @@ class WirelessService(
         releaseMulticast()
     }
 
+    // ── TOFU pairing gate (async; mirrors HarmonyOS evaluatePairing / respondPairing / cancelPairing) ──
+    private val lock = Any()
+    private val sessionDenied = HashSet<String>()             // peers refused THIS run (no re-prompt until restart)
+    private var pendingResolve: ((Boolean) -> Unit)? = null   // resolver of the one in-flight prompt
+    private var pendingPeerId: String = ""
+    private var pendingOwnerId: Int = 0                       // transport clientId — only it may cancel its prompt
+    private var pendingPromptId: Int = 0                      // monotonic — the user's tap must echo it
+    private var promptSeq: Int = 0
+    private var pendingTimeout: ScheduledFuture<*>? = null
+    private val scheduler = Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "sc-pairing-timeout").apply { isDaemon = true }
+    }
+
     /**
-     * TOFU gate, called on the transport's read thread during the `hello` handshake. Loopback (wired)
-     * → always allow. LAN + already trusted → allow. LAN + unknown → prompt the user and BLOCK this
-     * single-client thread until they decide (allow → persist + true; deny / 60s timeout → false).
-     * Mirrors the HarmonyOS pairing gate (no gate / loopback ⇒ wired behaviour is byte-unchanged).
+     * ASYNC TOFU gate, called on the transport read thread during `hello`. It DOES NOT block the read
+     * loop — so a client disconnect is noticed immediately and the single-active slot frees at once (the
+     * old blocking design held it for up to 60s, starving even the wired adb client). Loopback (wired) and
+     * trusted peers resolve true synchronously; an unknown LAN peer raises the 允许/拒绝 prompt and resolves
+     * on the user's tap, or false on 60s timeout / owner-disconnect. Mirrors HarmonyOS evaluatePairing.
      */
-    fun allowClient(peerId: String, deviceName: String, isLocalhost: Boolean): Boolean {
-        if (isLocalhost) return true
-        if (pairing.isTrusted(peerId)) return true
-        val cb = onPairingRequest ?: return false   // no UI wired up ⇒ refuse LAN (fail safe)
-        val latch = CountDownLatch(1)
-        val allowed = java.util.concurrent.atomic.AtomicBoolean(false)
-        cb(peerId, deviceName) { ok -> allowed.set(ok); latch.countDown() }
-        val answered = try { latch.await(60, TimeUnit.SECONDS) } catch (e: InterruptedException) { false }
-        if (answered && allowed.get()) { pairing.trust(peerId); return true }
-        return false
+    fun evaluate(peerId: String, deviceName: String, isLocalhost: Boolean, ownerId: Int, onResult: (Boolean) -> Unit) {
+        if (isLocalhost) { onResult(true); return }            // wired/adb (loopback) → always trusted
+        if (peerId.isEmpty()) { onResult(false); return }      // can't TOFU an anonymous peer
+        if (pairing.isTrusted(peerId)) { onResult(true); return }
+        val cb = onPairingRequest
+        if (cb == null) { onResult(false); return }            // no UI wired up ⇒ refuse LAN (fail safe)
+        var promptId = -1   // stays -1 ⇒ refused under the lock (denied this run, or a prompt already in flight)
+        synchronized(lock) {
+            if (!sessionDenied.contains(peerId) && pendingResolve == null) {   // else: one prompt at a time (anti-hijack)
+                pendingResolve = onResult
+                pendingPeerId = peerId
+                pendingOwnerId = ownerId
+                pendingPromptId = ++promptSeq
+                promptId = pendingPromptId
+                // Timeout matches on promptId so a late-firing timer can never settle a LATER prompt that
+                // reused the slot (the timer is also cancelled on any tap/cancel). Wrap as Runnable to pick
+                // the schedule(Runnable,…) overload (a Unit lambda is otherwise ambiguous vs Callable).
+                pendingTimeout = scheduler.schedule(
+                    Runnable { settleIf({ promptId == pendingPromptId }, allow = false, deny = false) },
+                    PAIR_TIMEOUT_SEC, TimeUnit.SECONDS)
+            }
+        }
+        if (promptId < 0) { onResult(false); return }          // refuse OUTSIDE the lock (no blocking send under lock)
+        cb(peerId, deviceName, promptId)
+    }
+
+    /** User tapped 允许(true)/拒绝(false). `promptId` binds the answer to the shown dialog (a stale tap is ignored). */
+    fun respondPairing(promptId: Int, allow: Boolean) = settleIf({ promptId == pendingPromptId }, allow, deny = !allow)
+
+    /** Owning connection (by transport ownerId) closed/gave up → free the slot + dismiss the dialog (no late trust). */
+    fun cancelPairing(ownerId: Int) = settleIf({ ownerId == pendingOwnerId }, allow = false, deny = false)
+
+    /** App teardown: drop any in-flight prompt, stop advertising, release the timer thread. */
+    fun dispose() {
+        settleIf({ true }, allow = false, deny = false)
+        stopAdvertise()
+        scheduler.shutdownNow()
+    }
+
+    /** Resolve the in-flight prompt iff [matches]. Single source of truth: cancels the timeout and clears
+     *  pending state under [lock], then trusts/denies + dismisses the dialog + resolves OUTSIDE the lock
+     *  (the resolver re-enters Session→transport.send, never back into WirelessService). No-op if nothing
+     *  is pending or [matches] is false (e.g. a stale tap, or a cancel for a different owner). */
+    private fun settleIf(matches: () -> Boolean, allow: Boolean, deny: Boolean) {
+        var resolve: ((Boolean) -> Unit)? = null
+        var peerId = ""
+        synchronized(lock) {
+            if (pendingResolve == null || !matches()) return
+            resolve = pendingResolve
+            peerId = pendingPeerId
+            pendingTimeout?.cancel(false); pendingTimeout = null
+            pendingResolve = null; pendingPeerId = ""; pendingOwnerId = 0; pendingPromptId = 0
+            if (deny && peerId.isNotEmpty()) sessionDenied.add(peerId)
+        }
+        if (allow && peerId.isNotEmpty()) pairing.trust(peerId)
+        onPairingDismiss?.invoke()
+        resolve?.invoke(allow)
     }
 
     fun trustedPeers(): Set<String> = pairing.list()
@@ -122,6 +195,7 @@ class WirelessService(
     private companion object {
         const val PREFS = "sc_wireless"
         const val KEY_ENABLED = "enabled"
+        const val PAIR_TIMEOUT_SEC = 60L                 // auto-reject an unanswered pairing prompt after 60s
         const val SERVICE_TYPE = "_superconnect._tcp"   // MUST match the Mac NWBrowser + HarmonyOS advertiser
     }
 }

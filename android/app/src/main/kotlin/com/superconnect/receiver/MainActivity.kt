@@ -35,6 +35,7 @@ import com.superconnect.protocol.InputType
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private var transport: TcpServerTransport? = null
     private var wireless: WirelessService? = null
+    private var pairingDialog: android.app.AlertDialog? = null   // live TOFU prompt (dismissed on settle/teardown)
     private lateinit var statusView: TextView
     private lateinit var surfaceView: SurfaceView
 
@@ -78,22 +79,26 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // _tcp the Mac already browses for HarmonyOS); TOFU-pair unknown LAN Macs (loopback/wired exempt).
         // Free 1-pad-1-mac, wired + wireless.
         val wl = WirelessService(this) { Log.i(TAG, "[wl] $it") }
-        wl.onPairingRequest = { _, name, resolve -> runOnUiThread { showPairingDialog(name, resolve) } }
+        wl.onPairingRequest = { _, name, promptId -> runOnUiThread { showPairingDialog(name, promptId) } }
+        wl.onPairingDismiss = { runOnUiThread { pairingDialog?.dismiss(); pairingDialog = null } }
         wireless = wl
         val bind = wl.bindAddress()
         Log.i(TAG, "caps ${caps.screenWidth}x${caps.screenHeight}@${caps.scale} listen $bind:8888")
         val t = TcpServerTransport(port = 8888, bindAddress = bind, log = { Log.i(TAG, "[tcp] $it") })
+        t.onClientGone = { ownerId -> wl.cancelPairing(ownerId) }   // a disconnect frees any in-flight pairing prompt
+        // Advertise over mDNS only AFTER the socket is bound (fired on the server thread) — never before
+        // accept() is ready, and never at all if the bind fails. Carries the actually-bound port.
+        t.onListening = { _, port -> wl.startAdvertise(DeviceInfo.deviceName(), port) }
         inputSender = InputSender(t)
         surfaceView.setOnTouchListener { v, ev -> handleTouch(v, ev) }
         val session = Session(t, caps, DeviceInfo.deviceName(), DeviceInfo.peerId(this), log = { Log.i(TAG, "[sess] $it") })
-        session.pairingGate = { pid, nm, local -> wl.allowClient(pid, nm, local) }
+        session.pairingGate = { pid, nm, local, ownerId, onResult -> wl.evaluate(pid, nm, local, ownerId, onResult) }
         session.onStatus = { s -> runOnUiThread { setStatus(s) } }
         session.onVideoConfig = { w, h, codec, _ -> onVideoConfig(w, h, codec) }
         session.onVideo = { payload, kf -> onVideo(payload, kf) }
         session.attach()
-        t.start()
+        t.start()                  // binds, then fires onListening → wl.startAdvertise (mDNS) on success
         transport = t
-        wl.startAdvertise(DeviceInfo.deviceName(), 8888)
 
         val ip = wl.wifiIpv4()
         val wlLine = if (ip.isEmpty()) "无线：开（未连 Wi‑Fi）" else "无线：$ip:8888"
@@ -250,21 +255,27 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun hideStatus() { statusView.visibility = View.GONE }
 
     /** TOFU prompt for an unknown LAN Mac (wireless). 允许 → trust+proceed, 拒绝 → reject. Runs on the UI
-     *  thread; `resolve` releases the server-thread handshake latch in WirelessService.allowClient(). */
-    private fun showPairingDialog(deviceName: String, resolve: (Boolean) -> Unit) {
+     *  thread; the tap echoes `promptId` back via WirelessService.respondPairing so a stale tap (its prompt
+     *  already timed out / was cancelled by a disconnect) can't settle a different prompt. The dialog handle
+     *  is kept so onPairingDismiss/onDestroy can tear it down deterministically (no WindowLeaked). */
+    private fun showPairingDialog(deviceName: String, promptId: Int) {
+        // A finishing/destroyed Activity can't host a dialog (BadTokenException) — reject so the gate still settles.
+        if (isFinishing || isDestroyed) { wireless?.respondPairing(promptId, false); return }
+        pairingDialog?.dismiss()   // never stack two prompts
         var decided = false
-        android.app.AlertDialog.Builder(this)
+        pairingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("允许连接？")
             .setMessage("“$deviceName” 想通过无线网络连接到本机投屏。\n允许后将记住该设备。")
             .setCancelable(false)
-            .setPositiveButton("允许") { _, _ -> if (!decided) { decided = true; resolve(true) } }
-            .setNegativeButton("拒绝") { _, _ -> if (!decided) { decided = true; resolve(false) } }
+            .setPositiveButton("允许") { _, _ -> if (!decided) { decided = true; wireless?.respondPairing(promptId, true) } }
+            .setNegativeButton("拒绝") { _, _ -> if (!decided) { decided = true; wireless?.respondPairing(promptId, false) } }
             .show()
     }
 
     override fun onDestroy() {
-        wireless?.stopAdvertise()
-        transport?.stop()
+        pairingDialog?.dismiss(); pairingDialog = null
+        transport?.stop()         // close sockets first → read loop ends (fires onClientGone → cancelPairing)
+        wireless?.dispose()        // then drop any in-flight prompt + stop mDNS advertising + release the timer thread
         synchronized(lifecycleLock) { decoder?.stop(); decoder = null }
         super.onDestroy()
     }

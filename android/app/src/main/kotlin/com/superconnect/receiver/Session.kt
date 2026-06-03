@@ -23,9 +23,12 @@ class Session(
     var onVideo: ((payload: ByteArray, isKeyframe: Boolean) -> Unit)? = null
     var onVideoConfig: ((width: Int, height: Int, codec: String, hdr: String) -> Unit)? = null
     var onStatus: ((String) -> Unit)? = null
-    /** Wireless TOFU gate (null ⇒ no gate ⇒ allow ⇒ wired behaviour unchanged). Given the Mac's
-     *  (peerId, deviceName, isLocalhost), returns true to proceed with hello_ack. Mirrors HarmonyOS. */
-    var pairingGate: ((peerId: String, deviceName: String, isLocalhost: Boolean) -> Boolean)? = null
+    /** Wireless TOFU gate (null ⇒ no gate ⇒ allow ⇒ wired behaviour unchanged). ASYNC: given the Mac's
+     *  (peerId, deviceName, isLocalhost, ownerId) it resolves `onResult(true)` to proceed with hello_ack
+     *  or `onResult(false)` to reject. Non-blocking, so the read loop keeps running and notices a client
+     *  disconnect immediately (freeing the single-active slot). Mirrors HarmonyOS evaluatePairing. */
+    var pairingGate: ((peerId: String, deviceName: String, isLocalhost: Boolean, ownerId: Int,
+                       onResult: (Boolean) -> Unit) -> Unit)? = null
 
     fun attach() {
         transport.onClientChange = { connected -> onStatus?.invoke(if (connected) "已连接 · 握手中…" else "等待 Mac 连接…") }
@@ -45,16 +48,20 @@ class Session(
         when (msg.optString("type")) {
             "hello" -> {
                 // Wireless TOFU: a LAN Mac must be approved before we ack (loopback/wired is exempt inside
-                // the gate). No gate ⇒ allow ⇒ wired byte-for-byte unchanged. On refusal, tell the Mac so
-                // it fails fast (matches HarmonyOS 'pairing_rejected') instead of retry-looping.
+                // the gate). ASYNC ⇒ the read loop keeps running so a disconnect frees the slot at once. No
+                // gate ⇒ allow ⇒ wired byte-for-byte unchanged. On refusal, tell the Mac so it fails fast
+                // (HostConnection treats 'pairing_rejected' fatal — no retry loop), matching HarmonyOS.
                 val gate = pairingGate
-                if (gate != null && !gate(msg.optString("peerId"), msg.optString("deviceName", "Mac"),
-                                          transport.clientIsLocalhost)) {
-                    log("pairing REJECTED for ${msg.optString("peerId")}")
-                    sendControl(JSONObject().put("type", "error").put("message", "pairing_rejected"))
-                    return
+                if (gate == null) { log("received hello → sending hello_ack"); sendHelloAck(); return }
+                val pid = msg.optString("peerId")
+                val name = msg.optString("deviceName", "Mac")
+                gate(pid, name, transport.clientIsLocalhost, transport.clientOwnerId) { allowed ->
+                    if (allowed) { log("pairing ok → sending hello_ack"); sendHelloAck() }
+                    else {
+                        log("pairing REJECTED for $pid")
+                        sendControl(JSONObject().put("type", "error").put("message", "pairing_rejected"))
+                    }
                 }
-                log("received hello → sending hello_ack"); sendHelloAck()
             }
             "video_config" -> onVideoConfig?.invoke(
                 msg.optInt("width"), msg.optInt("height"),
