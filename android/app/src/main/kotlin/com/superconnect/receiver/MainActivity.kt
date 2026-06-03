@@ -1,12 +1,13 @@
 package com.superconnect.receiver
 
 import android.app.Activity
+import android.content.Context
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
-import android.view.MotionEvent
+import android.view.KeyEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -15,18 +16,18 @@ import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.TextView
 import kotlin.math.min
-import com.superconnect.protocol.InputButtons
-import com.superconnect.protocol.InputEvent
-import com.superconnect.protocol.InputTool
-import com.superconnect.protocol.InputType
 
 /**
- * Generic Android receiver. Connection + handshake (TcpServerTransport + Session) and now HARDWARE
- * VIDEO DECODE: VIDEO frames → MediaCodec → SurfaceView, so the Mac's screen actually renders. Free/
- * generic (→ dev). Next: input capture (MotionEvent/KeyEvent → INPUT) + the wireless path.
+ * Generic Android receiver. Connection + handshake (TcpServerTransport + Session), HARDWARE VIDEO
+ * DECODE (VIDEO frames → MediaCodec → SurfaceView), and INPUT capture: touch/pen → InputRouter +
+ * GestureController (tap/drag/hover, 2-finger right-click + scroll, pinch), physical + soft keyboard →
+ * KeyboardHandler (+ AndroidKeyMap / ImeCatcher). Capture-only: all disambiguation lives in the
+ * decoupled input handlers, mirroring the HarmonyOS receiver. Free/generic (→ dev).
  *
  * Decoder lifecycle: created once BOTH the SurfaceView surface and a `video_config` are known, and
  * recreated on a new config (resolution/codec change). Frames before the first keyframe are dropped
@@ -89,8 +90,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // Advertise over mDNS only AFTER the socket is bound (fired on the server thread) — never before
         // accept() is ready, and never at all if the bind fails. Carries the actually-bound port.
         t.onListening = { _, port -> wl.startAdvertise(DeviceInfo.deviceName(), port) }
-        inputSender = InputSender(t)
-        surfaceView.setOnTouchListener { v, ev -> handleTouch(v, ev) }
+        // Input: one InputSender seam → InputRouter (finger gesture FSM + pen) + KeyboardHandler
+        // (physical keys + IME text). MainActivity is capture-only; all disambiguation lives in the
+        // decoupled handlers (mirrors HarmonyOS InputRouter/GestureController/KeyboardHandler).
+        val sender = InputSender(t)
+        val kb = KeyboardHandler(sender); keyboard = kb
+        val rt = InputRouter(sender, { surfaceView.width.toFloat() }, { surfaceView.height.toFloat() }); router = rt
+        surfaceView.setOnTouchListener { _, ev -> rt.onTouch(ev) }
+        // Hidden soft-keyboard capture surface (committed text / CJK → Mac) + a small ⌨ toggle to summon it.
+        val ime = ImeCatcher(this, onText = { kb.commitText(it) }, onBackspace = { kb.backspace(it) },
+            onKey = { kb.onKeyEvent(it) })
+        imeCatcher = ime
+        root.addView(ime, FrameLayout.LayoutParams(1, 1))
+        addKeyboardToggle()
         val session = Session(t, caps, DeviceInfo.deviceName(), DeviceInfo.peerId(this), log = { Log.i(TAG, "[sess] $it") })
         session.pairingGate = { pid, nm, local, ownerId, onResult -> wl.evaluate(pid, nm, local, ownerId, onResult) }
         session.onStatus = { s -> runOnUiThread { setStatus(s) } }
@@ -107,62 +119,40 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private var frameCount = 0
 
-    // --- input capture (v0.2: single-finger direct manipulation + pen) ---
-    private var inputSender: InputSender? = null
-    private var trackedPointer = -1   // the one finger/pen we follow (extra fingers ignored for now)
-    private var touchCount = 0
+    // --- input: router (finger gesture FSM + pen) + physical/soft keyboard, mirroring HarmonyOS ---
+    private var router: InputRouter? = null
+    private var keyboard: KeyboardHandler? = null
+    private var imeCatcher: ImeCatcher? = null
+    private var kbShown = false
 
-    /** Map a MotionEvent to INPUT events for the Mac. We track ONE pointer (the first down) so a stray
-     *  second finger can't fight the cursor; 2-finger gestures (scroll/right-click) are the next step. */
-    private fun handleTouch(v: View, ev: MotionEvent): Boolean {
-        val w = v.width.toFloat().coerceAtLeast(1f)
-        val h = v.height.toFloat().coerceAtLeast(1f)
-        when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                trackedPointer = ev.getPointerId(0)
-                sendPointer(InputType.TOUCH_DOWN, ev, 0, w, h)
-            }
-            MotionEvent.ACTION_MOVE -> {
-                if (trackedPointer >= 0) {
-                    val idx = ev.findPointerIndex(trackedPointer)
-                    if (idx >= 0) sendPointer(InputType.TOUCH_MOVE, ev, idx, w, h)
-                }
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (trackedPointer >= 0) {
-                    val idx = ev.findPointerIndex(trackedPointer)
-                    if (idx >= 0) sendPointer(InputType.TOUCH_UP, ev, idx, w, h)
-                    trackedPointer = -1
-                }
-            }
-            // ACTION_POINTER_DOWN / ACTION_POINTER_UP: ignore extra fingers (single-finger v0.2 basic)
+    /** Physical keys (hardware keyboard) → Mac, captured before any focused view. Unmapped keys
+     *  (volume/back/home) fall through to Android. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        keyboard?.onKeyEvent(event) == true || super.dispatchKeyEvent(event)
+
+    /** Small ⌨ button to summon the soft keyboard (there's no visible field). The hidden ImeCatcher
+     *  forwards committed text / CJK to the Mac. A fuller control surface lands with the floating ball. */
+    private fun addKeyboardToggle() {
+        val btn = Button(this).apply {
+            text = "⌨"
+            alpha = 0.55f
+            setOnClickListener { toggleKeyboard() }
         }
-        return true
+        root.addView(btn, FrameLayout.LayoutParams(150, 150, Gravity.BOTTOM or Gravity.END).also {
+            it.setMargins(0, 0, 40, 40)
+        })
     }
 
-    private fun sendPointer(type: InputType, ev: MotionEvent, i: Int, w: Float, h: Float) {
-        val tool = when (ev.getToolType(i)) {
-            MotionEvent.TOOL_TYPE_STYLUS -> InputTool.PEN
-            MotionEvent.TOOL_TYPE_ERASER -> InputTool.ERASER
-            MotionEvent.TOOL_TYPE_MOUSE -> InputTool.MOUSE
-            else -> InputTool.FINGER
+    private fun toggleKeyboard() {
+        val ime = imeCatcher ?: return
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        if (kbShown) {
+            imm.hideSoftInputFromWindow(ime.windowToken, 0)
+            ime.clearFocus(); kbShown = false
+        } else {
+            ime.requestFocus()
+            imm.showSoftInput(ime, InputMethodManager.SHOW_IMPLICIT); kbShown = true
         }
-        val x = (ev.getX(i) / w).coerceIn(0f, 1f)
-        val y = (ev.getY(i) / h).coerceIn(0f, 1f)
-        val tiltDeg = Math.toDegrees(ev.getAxisValue(MotionEvent.AXIS_TILT, i).toDouble())
-        val orient = ev.getAxisValue(MotionEvent.AXIS_ORIENTATION, i).toDouble()
-        // primary (left) while down/move; 0 on release — the Mac executes press/drag/release directly.
-        val buttons = if (type == InputType.TOUCH_UP) 0 else InputButtons.PRIMARY
-        if (++touchCount <= 2 || type == InputType.TOUCH_DOWN)
-            Log.i(TAG, "touch $type tool=${tool.name} x=${"%.3f".format(x)} y=${"%.3f".format(y)}")
-        inputSender?.send(InputEvent(
-            type = type.value, tool = tool.value, buttons = buttons, flags = 0,
-            timestampMs = ev.eventTime,
-            x = x, y = y, pressure = ev.getPressure(i),
-            tiltX = (tiltDeg * Math.sin(orient)).toFloat(),
-            tiltY = (-tiltDeg * Math.cos(orient)).toFloat(),
-            scrollX = 0f, scrollY = 0f, keyCode = 0, pointerId = ev.getPointerId(i),
-        ))
     }
 
     private fun onVideoConfig(w: Int, h: Int, codec: String) {
