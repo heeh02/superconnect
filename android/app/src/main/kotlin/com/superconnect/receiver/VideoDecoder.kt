@@ -60,6 +60,8 @@ class VideoDecoder(
 
     private fun loop(c: MediaCodec) {
         val info = MediaCodec.BufferInfo()
+        var rendered = 0
+        var fed = 0
         try {
             while (running) {
                 if (heldInput < 0) heldInput = c.dequeueInputBuffer(5_000)
@@ -71,13 +73,16 @@ class VideoDecoder(
                             ib.clear(); ib.put(frame)
                             c.queueInputBuffer(heldInput, 0, frame.size, ptsUs, 0)
                             ptsUs += 16_666   // ~60 fps spacing; PTS only needs to be monotonic for display
+                            if (++fed <= 2) log("fed input #$fed (${frame.size}B)")
                         }
                         heldInput = -1
                     }
                 }
                 var outIdx = c.dequeueOutputBuffer(info, 0)
+                if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) log("output format: ${c.outputFormat}")
                 while (outIdx >= 0) {
                     c.releaseOutputBuffer(outIdx, true)   // render to the Surface
+                    if (++rendered == 1) log("FIRST FRAME RENDERED ✓")
                     outIdx = c.dequeueOutputBuffer(info, 0)
                 }
             }
