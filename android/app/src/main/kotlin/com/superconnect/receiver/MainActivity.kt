@@ -2,6 +2,7 @@ package com.superconnect.receiver
 
 import android.app.Activity
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
@@ -11,9 +12,12 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
+import kotlin.math.min
 import com.superconnect.protocol.InputButtons
 import com.superconnect.protocol.InputEvent
 import com.superconnect.protocol.InputTool
@@ -41,19 +45,28 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var cfgMime = "video/avc"
     private var gotKeyframe = false
 
+    private lateinit var root: FrameLayout
+    private var vW = 0   // last video_config width/height (for aspect-correct sizing)
+    private var vH = 0
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        actionBar?.hide()   // no "Superconnect" title bar — full-bleed video
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        hideSystemUi()
 
-        val root = FrameLayout(this)
+        root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        // SurfaceView is centered and resized to the video's aspect ratio (no distortion, minimal bars).
         surfaceView = SurfaceView(this).also { it.holder.addCallback(this) }
-        root.addView(surfaceView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        root.addView(surfaceView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT, Gravity.CENTER))
+        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> fitSurface() }
         statusView = TextView(this).apply {
-            textSize = 16f
+            textSize = 15f
             gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            setBackgroundColor(0xCC000000.toInt())
-            setPadding(48, 48, 48, 48)
+            setTextColor(0xFFE5E5E5.toInt())
+            setBackgroundColor(Color.BLACK)
+            setPadding(56, 56, 56, 56)
+            setLineSpacing(0f, 1.3f)
         }
         root.addView(statusView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         setContentView(root)
@@ -141,7 +154,41 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             cfgW = w; cfgH = h; cfgMime = VideoDecoder.mimeFor(codec); gotKeyframe = false
             maybeCreateDecoder()
         }
-        runOnUiThread { setStatus("已连接 · ${w}×${h} ${codec.uppercase()} · 等待画面…") }
+        runOnUiThread { vW = w; vH = h; fitSurface(); setStatus("已连接 · ${w}×${h} ${codec.uppercase()} · 等待画面…") }
+    }
+
+    /** Size the SurfaceView to the video's aspect ratio, centered — undistorted, minimal black bars. */
+    private fun fitSurface() {
+        val cw = root.width; val ch = root.height
+        if (cw <= 0 || ch <= 0 || vW <= 0 || vH <= 0) return
+        val scale = min(cw.toFloat() / vW, ch.toFloat() / vH)
+        val tw = (vW * scale).toInt(); val th = (vH * scale).toInt()
+        val lp = surfaceView.layoutParams as FrameLayout.LayoutParams
+        if (lp.width != tw || lp.height != th) {
+            lp.width = tw; lp.height = th; lp.gravity = Gravity.CENTER
+            surfaceView.layoutParams = lp
+        }
+    }
+
+    private fun hideSystemUi() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false)
+            window.insetsController?.let {
+                it.hide(WindowInsets.Type.systemBars())
+                it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideSystemUi()   // re-assert immersive after dialogs / swipe-reveal
     }
 
     private fun onVideo(payload: ByteArray, isKeyframe: Boolean) {
