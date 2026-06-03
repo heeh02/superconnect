@@ -34,6 +34,7 @@ import com.superconnect.protocol.InputType
  */
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private var transport: TcpServerTransport? = null
+    private var wireless: WirelessService? = null
     private lateinit var statusView: TextView
     private lateinit var surfaceView: SurfaceView
 
@@ -72,20 +73,31 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         setContentView(root)
 
         val caps = DeviceInfo.caps(this)
-        Log.i(TAG, "caps ${caps.screenWidth}x${caps.screenHeight}@${caps.scale} listen 127.0.0.1:8888")
-        val t = TcpServerTransport(port = 8888, bindAddress = "127.0.0.1", log = { Log.i(TAG, "[tcp] $it") })
+        // Wireless (Wi-Fi LAN): bind 0.0.0.0 so ONE listener serves BOTH the wired adb-forwarded loopback
+        // client AND LAN clients; advertise over mDNS/NSD so the Mac auto-discovers us (same _superconnect.
+        // _tcp the Mac already browses for HarmonyOS); TOFU-pair unknown LAN Macs (loopback/wired exempt).
+        // Free 1-pad-1-mac, wired + wireless.
+        val wl = WirelessService(this) { Log.i(TAG, "[wl] $it") }
+        wl.onPairingRequest = { _, name, resolve -> runOnUiThread { showPairingDialog(name, resolve) } }
+        wireless = wl
+        val bind = wl.bindAddress()
+        Log.i(TAG, "caps ${caps.screenWidth}x${caps.screenHeight}@${caps.scale} listen $bind:8888")
+        val t = TcpServerTransport(port = 8888, bindAddress = bind, log = { Log.i(TAG, "[tcp] $it") })
         inputSender = InputSender(t)
         surfaceView.setOnTouchListener { v, ev -> handleTouch(v, ev) }
         val session = Session(t, caps, DeviceInfo.deviceName(), DeviceInfo.peerId(this), log = { Log.i(TAG, "[sess] $it") })
+        session.pairingGate = { pid, nm, local -> wl.allowClient(pid, nm, local) }
         session.onStatus = { s -> runOnUiThread { setStatus(s) } }
         session.onVideoConfig = { w, h, codec, _ -> onVideoConfig(w, h, codec) }
         session.onVideo = { payload, kf -> onVideo(payload, kf) }
         session.attach()
         t.start()
         transport = t
+        wl.startAdvertise(DeviceInfo.deviceName(), 8888)
 
-        setStatus("等待 Mac 连接…\n本机 ${caps.screenWidth}×${caps.screenHeight} @${caps.scale}x\n" +
-            "（有线：adb forward tcp:8888 tcp:8888）")
+        val ip = wl.wifiIpv4()
+        val wlLine = if (ip.isEmpty()) "无线：开（未连 Wi‑Fi）" else "无线：$ip:8888"
+        setStatus("等待 Mac 连接…\n本机 ${caps.screenWidth}×${caps.screenHeight} @${caps.scale}x\n$wlLine\n有线：adb forward tcp:8888 tcp:8888")
     }
 
     private var frameCount = 0
@@ -237,7 +249,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun hideStatus() { statusView.visibility = View.GONE }
 
+    /** TOFU prompt for an unknown LAN Mac (wireless). 允许 → trust+proceed, 拒绝 → reject. Runs on the UI
+     *  thread; `resolve` releases the server-thread handshake latch in WirelessService.allowClient(). */
+    private fun showPairingDialog(deviceName: String, resolve: (Boolean) -> Unit) {
+        var decided = false
+        android.app.AlertDialog.Builder(this)
+            .setTitle("允许连接？")
+            .setMessage("“$deviceName” 想通过无线网络连接到本机投屏。\n允许后将记住该设备。")
+            .setCancelable(false)
+            .setPositiveButton("允许") { _, _ -> if (!decided) { decided = true; resolve(true) } }
+            .setNegativeButton("拒绝") { _, _ -> if (!decided) { decided = true; resolve(false) } }
+            .show()
+    }
+
     override fun onDestroy() {
+        wireless?.stopAdvertise()
         transport?.stop()
         synchronized(lifecycleLock) { decoder?.stop(); decoder = null }
         super.onDestroy()

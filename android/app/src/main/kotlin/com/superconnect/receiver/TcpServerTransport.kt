@@ -23,6 +23,11 @@ class TcpServerTransport(
     var onFrame: ((channel: Int, flags: Int, payload: ByteArray) -> Unit)? = null
     var onClientChange: ((connected: Boolean) -> Unit)? = null
 
+    /** True while the connected client came in over loopback (wired / adb-forwarded). The wireless TOFU
+     *  pairing gate exempts loopback and only challenges LAN clients. Set on connect, before frames flow. */
+    @Volatile var clientIsLocalhost: Boolean = false
+        private set
+
     @Volatile private var running = false
     private var server: ServerSocket? = null
     @Volatile private var client: Socket? = null
@@ -60,8 +65,9 @@ class TcpServerTransport(
     private fun handleClient(sock: Socket) {
         client = sock
         sock.tcpNoDelay = true
+        clientIsLocalhost = sock.inetAddress?.isLoopbackAddress ?: false   // wired/adb (loopback) is pairing-exempt; LAN needs TOFU
         onClientChange?.invoke(true)
-        log("client connected ${sock.inetAddress}")
+        log("client connected ${sock.inetAddress} (localhost=$clientIsLocalhost)")
         val decoder = FrameDecoder()
         val buf = ByteArray(64 * 1024)
         try {

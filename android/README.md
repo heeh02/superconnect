@@ -31,9 +31,17 @@ wire format matches the Mac host byte-for-byte.
 - [x] TCP server transport (mirror `TcpServerTransport.ets`, single-active) + hello/handshake `Session`
       (advertises screen caps + name + role; handles `video_config`/`ping`). Mac can now connect wired.
 - [x] MediaCodec H.264/HEVC decode → `SurfaceView` render (newest-wins, low-latency, keyframe-gated).
-- [ ] Input capture: `MotionEvent` (touch + stylus pressure/tilt) + `KeyEvent` → INPUT frames.
-- [ ] Discovery advertise (NSD/mDNS) + TOFU pairing + 0.0.0.0 bind for the wireless path.
-- [ ] Wired bring-up over `adb forward` (Mac side already done: `AdbFportTunnel` / `AndroidWiredDiscovery`).
+- [x] Input capture: `MotionEvent` (touch + stylus pressure/tilt) → INPUT frames (single-finger v0.2).
+- [x] Wireless path: `0.0.0.0` bind + NSD/mDNS advertise (`_superconnect._tcp`) + TOFU pairing + Wi-Fi IP
+      hint. `WirelessService` + `PairingStore` (mirror HarmonyOS). The Mac's mDNS `WirelessDiscovery`
+      auto-finds the device; unknown LAN Macs get a 允许/拒绝 prompt (loopback/wired exempt).
+- [x] Wired bring-up over `adb forward` (Mac side: `AdbFportTunnel` / `AndroidWiredDiscovery`).
+
+## First connect test (wireless)
+1. Same Wi-Fi as the Mac. Launch this app — the status shows **无线：<ip>:8888**.
+2. On the Mac (free app from `dev`), the tablet auto-appears (mDNS) — or add it by that IP. Connect.
+3. First time from a given Mac → a **允许连接？** prompt on the tablet; tap **允许** (remembered after).
+   (Binding `0.0.0.0` means the wired `adb forward` path still works simultaneously, pairing-exempt.)
 
 ## First connect test (wired)
 1. Enable **USB debugging** on the tablet; plug in; accept the RSA prompt.

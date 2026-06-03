@@ -23,6 +23,9 @@ class Session(
     var onVideo: ((payload: ByteArray, isKeyframe: Boolean) -> Unit)? = null
     var onVideoConfig: ((width: Int, height: Int, codec: String, hdr: String) -> Unit)? = null
     var onStatus: ((String) -> Unit)? = null
+    /** Wireless TOFU gate (null ⇒ no gate ⇒ allow ⇒ wired behaviour unchanged). Given the Mac's
+     *  (peerId, deviceName, isLocalhost), returns true to proceed with hello_ack. Mirrors HarmonyOS. */
+    var pairingGate: ((peerId: String, deviceName: String, isLocalhost: Boolean) -> Boolean)? = null
 
     fun attach() {
         transport.onClientChange = { connected -> onStatus?.invoke(if (connected) "已连接 · 握手中…" else "等待 Mac 连接…") }
@@ -40,7 +43,19 @@ class Session(
     private fun handleControl(payload: ByteArray) {
         val msg = try { JSONObject(String(payload, Charsets.UTF_8)) } catch (e: Exception) { log("bad control json: $e"); return }
         when (msg.optString("type")) {
-            "hello" -> { log("received hello → sending hello_ack"); sendHelloAck() }
+            "hello" -> {
+                // Wireless TOFU: a LAN Mac must be approved before we ack (loopback/wired is exempt inside
+                // the gate). No gate ⇒ allow ⇒ wired byte-for-byte unchanged. On refusal, tell the Mac so
+                // it fails fast (matches HarmonyOS 'pairing_rejected') instead of retry-looping.
+                val gate = pairingGate
+                if (gate != null && !gate(msg.optString("peerId"), msg.optString("deviceName", "Mac"),
+                                          transport.clientIsLocalhost)) {
+                    log("pairing REJECTED for ${msg.optString("peerId")}")
+                    sendControl(JSONObject().put("type", "error").put("message", "pairing_rejected"))
+                    return
+                }
+                log("received hello → sending hello_ack"); sendHelloAck()
+            }
             "video_config" -> onVideoConfig?.invoke(
                 msg.optInt("width"), msg.optInt("height"),
                 msg.optString("codec", "h264"), msg.optString("hdr", "off"))

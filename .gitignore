@@ -45,3 +45,8 @@ harmony/**/.preview/
 
 # Claude Code session / local memory (not for publish)
 .claude/
+
+# Android build artifacts
+android/*.apk
+android/*.apk.idsig
+android/**/build/

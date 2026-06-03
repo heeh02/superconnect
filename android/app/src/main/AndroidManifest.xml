@@ -4,6 +4,9 @@
     <!-- LAN receive (wireless) + local socket for the adb-forwarded wired path. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Wireless: read the Wi-Fi IPv4 (manual-connect hint) + hold a multicast lock for mDNS/NSD. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- Keep the screen on while mirroring (added when the pipeline lands). -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
