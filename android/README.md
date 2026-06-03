@@ -30,7 +30,7 @@ wire format matches the Mac host byte-for-byte.
 - [x] Project scaffold + `:protocol` wire codec (FrameCodec, InputCodec) + conformance test.
 - [x] TCP server transport (mirror `TcpServerTransport.ets`, single-active) + hello/handshake `Session`
       (advertises screen caps + name + role; handles `video_config`/`ping`). Mac can now connect wired.
-- [ ] MediaCodec H.264/HEVC decode → `SurfaceView` render (consume the VIDEO frames).
+- [x] MediaCodec H.264/HEVC decode → `SurfaceView` render (newest-wins, low-latency, keyframe-gated).
 - [ ] Input capture: `MotionEvent` (touch + stylus pressure/tilt) + `KeyEvent` → INPUT frames.
 - [ ] Discovery advertise (NSD/mDNS) + TOFU pairing + 0.0.0.0 bind for the wireless path.
 - [ ] Wired bring-up over `adb forward` (Mac side already done: `AdbFportTunnel` / `AndroidWiredDiscovery`).
