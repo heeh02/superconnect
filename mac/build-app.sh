@@ -35,14 +35,21 @@ security unlock-keychain -p "$KCPASS" "$KC" 2>/dev/null || true
 echo "▸ compiling (release, universal arm64 + x86_64)…"
 swift build -c release --arch arm64 --arch x86_64 --product superconnect-app
 
-APP="$HOME/Desktop/Superconnect.app"
-echo "▸ assembling $APP"
+# App identity is overridable so a SEPARATE build (e.g. the free `superconnect_free`) can coexist with
+# the mainline Superconnect.app — distinct name + bundle id + path → its own TCC grants, no collision.
+APP_NAME="${SC_APP_NAME:-Superconnect}"
+BUNDLE_ID="${SC_BUNDLE_ID:-com.superconnect.mac}"
+APP="${SC_APP_PATH:-$HOME/Desktop/$APP_NAME.app}"
+echo "▸ assembling $APP (name=$APP_NAME id=$BUNDLE_ID)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Universal multi-arch build lands under .build/apple/Products/Release (not .build/release).
 cp .build/apple/Products/Release/superconnect-app "$APP/Contents/MacOS/superconnect-app"
 echo "▸ app binary archs: $(lipo -archs "$APP/Contents/MacOS/superconnect-app" 2>/dev/null || echo '?')"
-cp app/Info.plist "$APP/Contents/Info.plist"
+# Patch CFBundleName/DisplayName (exact `<string>Superconnect</string>`) + bundle id from the template.
+sed -e "s#<string>Superconnect</string>#<string>$APP_NAME</string>#g" \
+    -e "s#com.superconnect.mac#$BUNDLE_ID#g" \
+    app/Info.plist > "$APP/Contents/Info.plist"
 cp app/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"   # constellation icon (matches the tablet)
 
 # Bundle hdc (+ its libusb) so the app is SELF-CONTAINED — the user needs NO DevEco install.
