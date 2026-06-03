@@ -4,8 +4,10 @@ import Foundation
 /// `TunnelService` / `ConnectionCoordinator` consume — it keeps the wired-vs-wireless
 /// branch from leaking into the UI or view-model layers.
 enum Endpoint: Hashable, Codable {
-    /// Reached over USB through `hdc fport`; needs a tunnel that forwards a local port.
+    /// Reached over USB through `hdc fport` (HarmonyOS); needs a tunnel that forwards a local port.
     case wiredHdc(serial: String, port: UInt16)
+    /// Reached over USB through `adb forward` (Android tablets); needs a tunnel that forwards a local port.
+    case wiredAdb(serial: String, port: UInt16)
     /// Reached directly over TCP (LAN / Wi-Fi); dialed as-is, no tunnel.
     case tcp(host: String, port: UInt16)
 }

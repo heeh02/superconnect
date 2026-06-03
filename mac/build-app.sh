@@ -78,8 +78,26 @@ else
   echo "⚠️  hdc NOT found on this build machine — the app will need DevEco at runtime (not self-contained)"
 fi
 
+# Bundle adb (Android wired bridge) so Android tablets work self-contained too. Google's platform-tools
+# adb is a UNIVERSAL macOS binary (arm64+x86_64) and freely redistributable, so a single flat copy at
+# Resources/adb/adb serves both arches (AdbTool looks there first, then a system adb).
+ADB_SRC=""
+for a in \
+  "$HOME/Library/Android/sdk/platform-tools/adb" \
+  "/opt/homebrew/bin/adb" "/usr/local/bin/adb" "$(command -v adb 2>/dev/null)"; do
+  [ -x "$a" ] && { ADB_SRC="$a"; break; }
+done
+if [ -n "$ADB_SRC" ]; then
+  mkdir -p "$APP/Contents/Resources/adb"
+  cp "$ADB_SRC" "$APP/Contents/Resources/adb/adb"
+  echo "▸ bundled adb from $ADB_SRC (archs: $(lipo -archs "$ADB_SRC" 2>/dev/null || echo '?')) → Resources/adb/"
+else
+  echo "ℹ️  adb NOT found — Android-wired needs a system adb at runtime (install Android platform-tools)."
+  echo "    Wireless to Android works without adb; drop platform-tools' adb into Resources/adb/ to self-contain."
+fi
+
 # Sign with the stable self-signed cert → TCC grants (Screen Recording / Accessibility) persist.
-# --deep signs the bundled hdc + libusb too.
+# --deep signs the bundled hdc/adb + libusb too.
 codesign --force --deep --sign "$CN" --keychain "$KC" "$APP"
 
 echo "✓ built $APP (signed: $CN)"

@@ -13,6 +13,7 @@ enum PhysicalKey: Equatable {
     static func from(_ device: Device) -> PhysicalKey {
         switch device.endpoint {
         case .wiredHdc(let serial, _): return .serial(serial)
+        case .wiredAdb(let serial, _): return .serial("adb:" + serial)   // namespaced: never collide with an hdc serial
         case .tcp(let host, _):        return .host(normalizeHost(host))
         }
     }

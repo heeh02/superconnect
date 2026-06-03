@@ -48,6 +48,32 @@ final class HdcFportTunnel: TunnelService {
     }
 }
 
+/// Real, built-now: forwards a local TCP port to an ANDROID device over USB via `adb forward`. The
+/// `adb` mirror of `HdcFportTunnel` — each device gets its own Mac-local port (#51), forwarded to the
+/// Android receiver's fixed listen port. Selected by the factory for a `.wiredAdb` endpoint.
+final class AdbFportTunnel: TunnelService {
+    private var opened: (serial: String, local: UInt16, remote: UInt16)?
+
+    func open(for endpoint: Endpoint) async throws -> TunnelTarget {
+        guard case let .wiredAdb(serial, remote) = endpoint else { throw AppError.tunnelFailed }
+        guard AdbTool.path() != nil else { throw AppError.hdcNotFound }   // reuse "bridge missing" error
+        // Same TOCTOU guard as hdc: free()→forward window can race; retry with a fresh local port.
+        for _ in 0..<3 {
+            let local = LocalPort.free() ?? remote
+            if AdbTool.forward(serial: serial, local: local, remote: remote) {
+                opened = (serial, local, remote)
+                return .dial(host: "127.0.0.1", port: local)
+            }
+        }
+        throw AppError.tunnelFailed
+    }
+
+    func close() {
+        if let o = opened { AdbTool.removeForward(serial: o.serial, local: o.local) }
+        opened = nil
+    }
+}
+
 /// Picks a free localhost TCP port by binding an ephemeral socket to `127.0.0.1:0`, reading the
 /// OS-assigned port, then releasing it. Gives each wired device its own Mac-local fport (#51).
 enum LocalPort {

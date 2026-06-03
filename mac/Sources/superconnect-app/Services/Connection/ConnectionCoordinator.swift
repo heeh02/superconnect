@@ -5,8 +5,10 @@ import Combine
 /// symmetric = dispatch `.host`→HostConnection / `.receiver`→ReceiverConnection here,
 /// touching no other file.
 typealias RoleFactory = (Role) -> ConnectionEngine
-/// Selects the tunnel for a transport (`.wired`→HdcFportTunnel, `.wireless`→DirectTunnel).
-typealias TunnelFactory = (TransportKind) -> TunnelService
+/// Selects the tunnel by ENDPOINT, not badge kind — so multiple wired bridges coexist:
+/// `.wiredHdc`→HdcFportTunnel (HarmonyOS), `.wiredAdb`→AdbFportTunnel (Android), `.tcp`→DirectTunnel.
+/// Adding a brand-specific bridge later is a new Endpoint case + TunnelService impl — nothing here changes.
+typealias TunnelFactory = (Endpoint) -> TunnelService
 
 /// Owns the connect/disconnect/teardown lifecycle for EVERY connected device — a `deviceID`-keyed
 /// registry, so multiple tablets can be live extended displays at once (#51 Layer A). Each entry is
@@ -85,7 +87,7 @@ final class ConnectionCoordinator: ObservableObject {
             return
         }
 
-        let tunnel = tunnelFor(device.transport)
+        let tunnel = tunnelFor(device.endpoint)
         let engine = engineFor(role)
         engine.setPairingToken(device.pairingToken)   // wireless BLE proximity token (nil otherwise)
         // Wireless targets dial over the physical NIC (exclude VPN/utun) so a VPN can't hijack the LAN
