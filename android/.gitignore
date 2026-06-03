@@ -6,3 +6,6 @@ local.properties
 .DS_Store
 captures/
 .cxx/
+
+# manual-build output
+app-debug.apk
