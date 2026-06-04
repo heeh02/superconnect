@@ -93,6 +93,15 @@ final class ConnectionCoordinator: ObservableObject {
         // Wireless targets dial over the physical NIC (exclude VPN/utun) so a VPN can't hijack the LAN
         // route; wired (hdc/loopback) keeps default routing.
         engine.setAvoidVirtualInterfaces(device.transport == .wireless)
+        // Self-heal a cleared wired forward: on each reconnect the engine asks the tunnel to re-open
+        // (close drops the stale forward; open re-forwards on a fresh local port). DirectTunnel
+        // (wireless) just returns the same target. Strong `tunnel` capture is cycle-free — the tunnel
+        // never references the engine, so both release together when the ManagedConnection is dropped.
+        let endpoint = device.endpoint
+        engine.setTunnelReopen {
+            tunnel.close()
+            return try? await tunnel.open(for: endpoint)
+        }
         connectSeq += 1
         let mc = ManagedConnection(device: device, engine: engine, tunnel: tunnel, startSeq: connectSeq)
         conns[device.id] = mc

@@ -126,6 +126,14 @@ final class HostConnection: ConnectionEngine {
         lifeQ.async { self.avoidVirtualInterfaces = avoid }
     }
 
+    /// Re-establish the tunnel (re-forward) before a reconnect. Set by the coordinator at connect;
+    /// awaited by `retry()` so a wired link recovers a cleared USB forward instead of looping on a dead
+    /// local port. nil ⇒ no tunnel layer (keep the current host:port). Satisfies `ConnectionEngine`.
+    private var reopenTunnel: (() async -> TunnelTarget?)?
+    func setTunnelReopen(_ reopen: (() async -> TunnelTarget?)?) {
+        lifeQ.async { self.reopenTunnel = reopen }
+    }
+
     /// Live bitrate change (clamped 10–100 Mbps). Retunes the running encoder immediately AND is read
     /// by the next buildProducer, so a reconnect/rotation re-applies it. Satisfies `ConnectionEngine`.
     func setBitrate(_ mbps: Int) {
@@ -227,6 +235,10 @@ final class HostConnection: ConnectionEngine {
     }
 
     /// MUST run on lifeQ. Bumps the generation (dedup) and schedules the next openSession on lifeQ.
+    /// Before reconnecting, RE-OPEN THE TUNNEL (re-forward) so a wired link self-heals when the USB
+    /// forward was cleared (the old code reconnected the socket to a now-dead local port and looped on
+    /// "Connection refused" forever). Wireless reopen returns the same target (no-op). If no reopen hook
+    /// is set, fall back to the plain socket retry. The 1.5s backoff is preserved.
     private func retry(gen: Int) {
         guard running, gen == generation else { return }
         generation += 1                       // stale callbacks for `gen` now guard out → one retry only
@@ -234,7 +246,16 @@ final class HostConnection: ConnectionEngine {
         teardownSession()
         stateSubject.send(.connecting)
         lifeQ.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.openSession(generation: next)
+            guard let self, self.running, next == self.generation else { return }
+            guard let reopen = self.reopenTunnel else { self.openSession(generation: next); return }
+            Task { [weak self] in
+                let target = await reopen()    // re-run adb/hdc forward (wired) / no-op (wireless)
+                self?.lifeQ.async {
+                    guard let self, self.running, next == self.generation else { return }
+                    if case let .dial(host, port)? = target { self.host = host; self.port = port }
+                    self.openSession(generation: next)
+                }
+            }
         }
     }
 
