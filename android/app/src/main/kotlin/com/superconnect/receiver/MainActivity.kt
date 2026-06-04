@@ -95,8 +95,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // decoupled handlers (mirrors HarmonyOS InputRouter/GestureController/KeyboardHandler).
         val sender = InputSender(t)
         val kb = KeyboardHandler(sender); keyboard = kb
-        val rt = InputRouter(sender, { surfaceView.width.toFloat() }, { surfaceView.height.toFloat() }); router = rt
-        surfaceView.setOnTouchListener { _, ev -> rt.onTouch(ev) }
+        // Touch listener on the FULL-SCREEN root (not the letterboxed SurfaceView) so a finger anywhere is
+        // captured; the router maps it against the SurfaceView's live rect within root → correct Mac coords
+        // even with black bars. (surfaceView.{left,top,width,height} are already in root's coordinate space.)
+        val rt = InputRouter(sender, {
+            floatArrayOf(surfaceView.left.toFloat(), surfaceView.top.toFloat(),
+                surfaceView.width.toFloat(), surfaceView.height.toFloat())
+        }); router = rt
+        root.setOnTouchListener { _, ev -> rt.onTouch(ev) }
         // Hidden soft-keyboard capture surface (committed text / CJK → Mac) + a small ⌨ toggle to summon it.
         val ime = ImeCatcher(this, onText = { kb.commitText(it) }, onBackspace = { kb.backspace(it) },
             onKey = { kb.onKeyEvent(it) })
