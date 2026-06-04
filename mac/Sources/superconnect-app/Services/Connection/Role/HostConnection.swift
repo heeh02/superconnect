@@ -24,6 +24,9 @@ final class HostConnection: ConnectionEngine {
     // clear error instead of spinning. Reset on a real connect (onConnected) and on a fresh connect().
     private var consecutiveTimeouts = 0
     private let maxConsecutiveTimeouts = 3
+    // True only while a session is fully handshaked. Gates the liveness heartbeat so we don't ping (and
+    // false-trip the no-pong timeout) during the connect/handshake window — the connect watchdog owns that.
+    private var handshakeDone = false
 
     private var host = "127.0.0.1"
     private var port: UInt16 = 8888
@@ -168,6 +171,7 @@ final class HostConnection: ConnectionEngine {
             self.lifeQ.async {
                 guard self.running, gen == self.generation else { return }
                 self.consecutiveTimeouts = 0   // a real connection landed → streak broken
+                self.handshakeDone = true      // arm the liveness heartbeat (see startFpsTimer)
                 self.tele.deviceName = session.peerDeviceName   // surface the real name (wired card too)
                 self.tele.peerId = session.peerId               // cross-transport id for conflict reconcile
                 self.diag("handshake done host=\(self.host) peerId=\(session.peerId ?? "<nil>") name=\(session.peerDeviceName ?? "<nil>")")
@@ -262,6 +266,7 @@ final class HostConnection: ConnectionEngine {
     /// MUST run on lifeQ. Nils the refs synchronously; stops the producer/transport off-queue so the
     /// serial lifecycle never blocks on the 2s VTCompressionSession invalidate.
     private func teardownSession() {
+        handshakeDone = false   // disarm the heartbeat until the next handshake completes
         frameLock.lock(); let prod = producer; producer = nil; frameLock.unlock()
         let t = transport; transport = nil
         session = nil; virtualDisplay = nil; setInjector(nil)
@@ -392,6 +397,10 @@ final class HostConnection: ConnectionEngine {
                 self.tele.fps = max(0, delta / 2)
                 self.tele.actualMbps = Int((Double(b) * 8.0 / 2.0 / 1_000_000.0).rounded())   // measured output over the 2s window
                 self.telemetrySubject.send(self.tele)
+                // Liveness heartbeat (only once handshaked): ping the tablet every 2s. If pongs stop
+                // arriving (half-open link the TCP stack didn't surface — e.g. a cleared adb forward),
+                // Session.sendPing trips onError("heartbeat timeout") → retry → re-forward → reconnect.
+                if self.handshakeDone { self.session?.sendPing() }
             }
         }
         t.resume()

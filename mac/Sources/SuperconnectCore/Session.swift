@@ -98,8 +98,22 @@ public final class Session {
         sendControl(hello)
     }
 
+    /// Max pings we'll let go unanswered before declaring the link dead. A half-open link (peer gone,
+    /// no TCP error — common through an adb/hdc USB forward) shows up here as pongs that stop arriving
+    /// while pings keep being sent. At the host's 2s ping cadence this is ~6s of silence.
+    private let maxOutstandingPings = 3
+
     public func sendPing() {
         stateLock.lock()
+        // Liveness check FIRST: if previous pings were never answered, the link is half-open. Surface it
+        // as an error so the engine tears down + retries (which re-forwards and reconnects) instead of
+        // streaming forever into a dead socket. Clear the backlog so a fresh session starts clean.
+        if pingTimestamps.count >= maxOutstandingPings {
+            pingTimestamps.removeAll()
+            stateLock.unlock()
+            onError?("heartbeat timeout — no pong (link half-open)")
+            return
+        }
         let seq = nextSeq
         nextSeq += 1
         let t0 = DispatchTime.now().uptimeNanoseconds
