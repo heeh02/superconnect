@@ -35,6 +35,15 @@ final class AppViewModel: ObservableObject {
         return (v >= 10 && v <= 100) ? v : 50
     }
 
+    /// Force H.264 encoding even when the tablet also offers HEVC. Compatibility escape hatch for the
+    /// rare Android device whose HEVC decoder misbehaves (black/green frames). HostConnection reads the
+    /// same key when it negotiates the codec, so the choice applies on the NEXT connect (codec is fixed
+    /// at session build, unlike bitrate which retunes live). Default off = caps-negotiated (HEVC preferred).
+    @Published var forceH264: Bool = UserDefaults.standard.bool(forKey: AppViewModel.forceH264Key) {
+        didSet { UserDefaults.standard.set(forceH264, forKey: AppViewModel.forceH264Key) }
+    }
+    static let forceH264Key = "sc.forceH264"
+
     private let store: DeviceStore
     private let coordinator: ConnectionCoordinator
     private let manualDiscovery: ManualDiscovery
@@ -95,6 +104,14 @@ final class AppViewModel: ObservableObject {
 
     func requestPermissions() {
         SystemPermissions.requestHost()
+        startPermissionPolling()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.refreshPermissions() }
+    }
+
+    /// Safety net for the rare "Accessibility shows authorized but input injection is inert" (stale TCC):
+    /// reset THIS app's grant + re-prompt so macOS re-evaluates the current binary, then re-poll status.
+    func regrantAccessibility() {
+        SystemPermissions.resetAccessibility()
         startPermissionPolling()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.refreshPermissions() }
     }

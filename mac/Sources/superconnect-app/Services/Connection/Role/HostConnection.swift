@@ -404,6 +404,9 @@ final class HostConnection: ConnectionEngine {
     }
 
     private func codec(from caps: [String: Any]?) -> VideoCodec {
+        // Compatibility escape hatch (AppViewModel's 编码 toggle): force H.264 even if the tablet offers
+        // HEVC, for devices whose HEVC decoder misbehaves. Read here so it applies at session build.
+        if UserDefaults.standard.bool(forKey: "sc.forceH264") { return .h264 }
         if let arr = caps?["codecs"] as? [Any], arr.compactMap({ $0 as? String }).contains("hevc") { return .hevc }
         return .h264
     }

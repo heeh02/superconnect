@@ -12,27 +12,30 @@ import com.superconnect.protocol.InputType
  * goes through [InputSender], so the bytes match the inline version) and routes pointer streams to
  * cohesive, self-contained handlers:
  *   • stylus/eraser → pen pressure path (pressure + tilt, single tracked contact)
- *   • finger        → [GestureController] (the gesture FSM)
- *   • mouse         → finger path for now (absolute), per the parity analysis — the Mac's mouse path
- *                     expects RELATIVE deltas, so routing mouse as a finger avoids the pinned-cursor
- *                     bug until the dedicated TrackpadHandler (relative cursor) lands in a later phase.
+ *   • finger        → [GestureController] (trackpad gestures), OR — when a handwriting mode is on —
+ *                     the pen-ink path / palm-rejected (see below)
+ *   • mouse         → finger path for now (absolute), per the parity analysis.
  *
- * Each handler's latches are internal to it, so a change to one cannot affect the others (the project's
- * modularity rule). The FSM emits in VIEW PIXELS; this seam normalizes x/y to [0,1] (except SCROLL,
- * whose deltas pass through in pixels for the Mac to scale).
+ * Two independent handwriting toggles (owned by the page, read live through accessors):
+ *   • [drawingMode]  (触控笔/绘画模式, HarmonyOS parity): while the stylus is on the glass — or within
+ *     [PALM_GRACE_MS] after it — fingers are DROPPED (palm rejection). The stylus inks with pressure.
+ *   • [fingerAsPen]  (手指当笔): the finger itself emits PEN ink, so a device with NO stylus can write.
+ * Precedence per finger event: palm-reject (drawingMode + pen active) ▸ fingerAsPen ink ▸ gesture FSM.
  *
  * [videoRect] returns the on-screen video rectangle `[left, top, width, height]` in the SAME coordinate
- * space as the touch events fed to [onTouch]. The touch listener lives on the FULL-SCREEN root (not the
- * letterboxed SurfaceView), so a finger anywhere is captured; we then map it against the video rect —
- * (raw − left)/width → [0,1] across the Mac screen, with black-bar touches clamped to the nearest edge
- * (harmless) rather than lost. This is what restores touch after the aspect-fit/letterbox UI change.
+ * space as the touch events fed to [onTouch]. The listener lives on the FULL-SCREEN root, so a finger
+ * anywhere is captured; we map it against the video rect — (raw − left)/width → [0,1] — black-bar
+ * touches clamped to the nearest edge (harmless).
  */
 class InputRouter(
     private val sender: InputSender,
-    private val videoRect: () -> FloatArray,   // [left, top, width, height] of the video surface, in touch coords
+    private val videoRect: () -> FloatArray,        // [left, top, width, height] of the video surface
+    private val fingerAsPen: () -> Boolean = { false },
+    private val drawingMode: () -> Boolean = { false },
 ) {
-    private var drawing = false
-    private var penId = -1
+    private var inkId = -1          // single tracked contact for the PEN-ink path (stylus or finger-as-pen)
+    private var penDown = false     // a STYLUS is currently on the glass (drives palm rejection)
+    private var lastPenMs = 0L      // uptime of the last stylus event (drives the post-lift grace window)
 
     private val gc = GestureController { m ->
         val isScroll = m.type == InputType.SCROLL.value
@@ -47,18 +50,22 @@ class InputRouter(
         ))
     }
 
-    /** Drawing mode (set by the future floating ball / control panel): 1 finger inks-only, no left press. */
-    fun setDrawing(d: Boolean) { drawing = d; gc.setDrawing(d) }
+    private fun msSincePen(): Long = SystemClock.uptimeMillis() - lastPenMs
 
     /** Touch entry — the full-screen root's OnTouchListener delegates here. Always consumes (returns true). */
     fun onTouch(ev: MotionEvent): Boolean {
         val r = videoRect(); if (r[2] <= 0f || r[3] <= 0f) return true   // no video laid out yet
-        // Stylus anywhere in the gesture → pen pressure path (P1 adds history replay + palm rejection).
+        // Real stylus anywhere in the gesture → pen pressure path (also marks pen activity for palm rejection).
         if (anyStylus(ev)) {
             if (ev.actionMasked == MotionEvent.ACTION_DOWN) gc.abortForPen()   // release/reset finger FSM
             onPen(ev)
             return true
         }
+        // ── finger ──
+        val drawing = drawingMode()
+        if (drawing && (penDown || msSincePen() < PALM_GRACE_MS)) return true   // palm rejection (stylus owns ink)
+        if (fingerAsPen()) { onFingerPen(ev); return true }                     // finger writes as a pen
+        gc.setDrawing(drawing)   // drawing + finger (pen idle) = pointer (no ink); desktop = direct drag
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> gc.onDown(ev)
             MotionEvent.ACTION_MOVE -> gc.onMove(ev)
@@ -76,27 +83,54 @@ class InputRouter(
         return false
     }
 
-    // ── Pen path (preserves the verified pressure/tilt behavior; single tracked stylus contact) ──
+    // ── Stylus pen path (verified pressure/tilt; single tracked contact). Marks pen activity. ──
     private fun onPen(ev: MotionEvent) {
+        lastPenMs = SystemClock.uptimeMillis()
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                penId = ev.getPointerId(ev.actionIndex)
+                penDown = true
+                inkId = ev.getPointerId(ev.actionIndex)
                 emitPen(ev, ev.actionIndex, InputType.TOUCH_DOWN.value, InputButtons.PRIMARY)
             }
             MotionEvent.ACTION_MOVE -> {
-                if (penId < 0) return
-                val pi = ev.findPointerIndex(penId); if (pi < 0) return
+                if (inkId < 0) return
+                val pi = ev.findPointerIndex(inkId); if (pi < 0) return
                 emitPen(ev, pi, InputType.TOUCH_MOVE.value, InputButtons.PRIMARY)
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (penId < 0) return
-                val pi = ev.findPointerIndex(penId)
+                penDown = false
+                if (inkId < 0) return
+                val pi = ev.findPointerIndex(inkId)
                 if (pi >= 0) emitPen(ev, pi, InputType.TOUCH_UP.value, 0)
-                penId = -1
+                inkId = -1
             }
         }
     }
 
+    // ── Finger-as-pen: the first finger inks like a stylus (tool=PEN + pressure). Extra fingers ignored
+    //    (single stroke). Does NOT set penDown — it is not a stylus, so it never palm-rejects itself. ──
+    private fun onFingerPen(ev: MotionEvent) {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                inkId = ev.getPointerId(ev.actionIndex)
+                emitPen(ev, ev.actionIndex, InputType.TOUCH_DOWN.value, InputButtons.PRIMARY)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (inkId < 0) return
+                val pi = ev.findPointerIndex(inkId); if (pi < 0) return
+                emitPen(ev, pi, InputType.TOUCH_MOVE.value, InputButtons.PRIMARY)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (inkId < 0) return
+                val pi = ev.findPointerIndex(inkId)
+                if (pi >= 0) emitPen(ev, pi, InputType.TOUCH_UP.value, 0)
+                inkId = -1
+            }
+        }
+    }
+
+    /** Emit a PEN-tool ink event. Finger contacts report tool FINGER → still mapped to PEN here (so the
+     *  Mac's PenInjector draws with the tablet-pointer subtype + pressure); a finger's tilt axes read 0. */
     private fun emitPen(ev: MotionEvent, pi: Int, type: Int, buttons: Int) {
         val r = videoRect(); val left = r[0]; val top = r[1]
         val w = r[2].coerceAtLeast(1f); val h = r[3].coerceAtLeast(1f)
@@ -110,5 +144,9 @@ class InputRouter(
             tiltX = (tiltDeg * Math.sin(orient)).toFloat(), tiltY = (-tiltDeg * Math.cos(orient)).toFloat(),
             pointerId = ev.getPointerId(pi),
         ))
+    }
+
+    private companion object {
+        const val PALM_GRACE_MS = 600L   // drop fingers this long after the last stylus activity (drawing mode)
     }
 }

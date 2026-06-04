@@ -13,11 +13,11 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
-import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.TextView
 import kotlin.math.min
@@ -98,17 +98,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // Touch listener on the FULL-SCREEN root (not the letterboxed SurfaceView) so a finger anywhere is
         // captured; the router maps it against the SurfaceView's live rect within root → correct Mac coords
         // even with black bars. (surfaceView.{left,top,width,height} are already in root's coordinate space.)
-        val rt = InputRouter(sender, {
-            floatArrayOf(surfaceView.left.toFloat(), surfaceView.top.toFloat(),
-                surfaceView.width.toFloat(), surfaceView.height.toFloat())
-        }); router = rt
-        root.setOnTouchListener { _, ev -> rt.onTouch(ev) }
-        // Hidden soft-keyboard capture surface (committed text / CJK → Mac) + a small ⌨ toggle to summon it.
+        val rt = InputRouter(sender,
+            { floatArrayOf(surfaceView.left.toFloat(), surfaceView.top.toFloat(),
+                surfaceView.width.toFloat(), surfaceView.height.toFloat()) },
+            fingerAsPen = { fingerAsPen },
+            drawingMode = { drawingMode })
+        router = rt
+        // "暂停输入" swallows screen touches so the user can operate the tablet itself; the floating ball
+        // and control panel are separate views on top and keep working.
+        root.setOnTouchListener { _, ev -> if (inputDisabled) true else rt.onTouch(ev) }
+        // Hidden soft-keyboard capture surface (committed text / CJK → Mac); summoned from the control panel.
         val ime = ImeCatcher(this, onText = { kb.commitText(it) }, onBackspace = { kb.backspace(it) },
             onKey = { kb.onKeyEvent(it) })
         imeCatcher = ime
         root.addView(ime, FrameLayout.LayoutParams(1, 1))
-        addKeyboardToggle()
+        addFloatingBall()   // tap = 手指当笔, long-press = control panel
         val session = Session(t, caps, DeviceInfo.deviceName(), DeviceInfo.peerId(this), log = { Log.i(TAG, "[sess] $it") })
         session.pairingGate = { pid, nm, local, ownerId, onResult -> wl.evaluate(pid, nm, local, ownerId, onResult) }
         session.onStatus = { s -> runOnUiThread { setStatus(s) } }
@@ -131,22 +135,65 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var imeCatcher: ImeCatcher? = null
     private var kbShown = false
 
+    // --- handwriting / control state (toggled from the floating ball + control panel) ---
+    private var fingerAsPen = false     // 手指当笔: finger emits PEN ink (write on any device)
+    private var drawingMode = false     // 绘画模式(触控笔): palm-reject fingers while the stylus is active
+    private var inputDisabled = false   // 暂停输入: swallow screen touches (operate the tablet itself)
+    private var ballHidden = false      // 隐藏悬浮球: fade the ball out (kept long-pressable to restore)
+    private var floatingBall: FloatingBall? = null
+    private var controlPanel: ControlPanel? = null
+    private var lastStatus = ""
+    private var lastCodec = ""
+    private fun px(v: Int) = (v * resources.displayMetrics.density).toInt()
+
     /** Physical keys (hardware keyboard) → Mac, captured before any focused view. Unmapped keys
      *  (volume/back/home) fall through to Android. */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean =
         keyboard?.onKeyEvent(event) == true || super.dispatchKeyEvent(event)
 
-    /** Small ⌨ button to summon the soft keyboard (there's no visible field). The hidden ImeCatcher
-     *  forwards committed text / CJK to the Mac. A fuller control surface lands with the floating ball. */
-    private fun addKeyboardToggle() {
-        val btn = Button(this).apply {
-            text = "⌨"
-            alpha = 0.55f
-            setOnClickListener { toggleKeyboard() }
+    /** Draggable floating control: tap toggles 手指当笔, drag repositions, long-press opens the panel. */
+    private fun addFloatingBall() {
+        val ball = FloatingBall(this,
+            onTap = { setFingerAsPen(!fingerAsPen) },
+            onLongPress = { showControlPanel() })
+        floatingBall = ball
+        root.addView(ball, FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+        ball.post {   // initial dock: bottom-right, once root + ball are measured
+            ball.x = (root.width - ball.width - px(20)).toFloat()
+            ball.y = (root.height - ball.height - px(80)).toFloat()
         }
-        root.addView(btn, FrameLayout.LayoutParams(150, 150, Gravity.BOTTOM or Gravity.END).also {
-            it.setMargins(0, 0, 40, 40)
-        })
+    }
+
+    private fun setFingerAsPen(on: Boolean) { fingerAsPen = on; floatingBall?.active = on }
+
+    private fun showControlPanel() {
+        if (controlPanel != null) return
+        val state = ControlPanel.State(
+            statusText = lastStatus, port = 8888,
+            vWidth = vW, vHeight = vH, vCodec = lastCodec,
+            wirelessOn = wireless?.enabled() ?: false, wifiIp = wireless?.wifiIpv4() ?: "",
+            pairedPeers = wireless?.trustedPeers()?.toList() ?: emptyList(),
+            fingerAsPen = fingerAsPen, drawingMode = drawingMode,
+            inputDisabled = inputDisabled, ballHidden = ballHidden,
+        )
+        val cb = ControlPanel.Callbacks(
+            onFingerAsPen = { setFingerAsPen(it) },
+            onDrawingMode = { drawingMode = it },
+            onPauseInput = { inputDisabled = it },
+            onHideBall = { ballHidden = it; floatingBall?.alpha = if (it) 0.08f else 0.6f },
+            onKeyboard = { toggleKeyboard() },
+            onToggleWireless = { wireless?.setEnabled(it) },
+            onForgetPeer = { wireless?.forgetPeer(it) },
+            onClose = { hideControlPanel() },
+        )
+        val panel = ControlPanel(this, state, cb)
+        controlPanel = panel
+        root.addView(panel)
+    }
+
+    private fun hideControlPanel() {
+        controlPanel?.let { root.removeView(it) }
+        controlPanel = null
     }
 
     private fun toggleKeyboard() {
@@ -167,7 +214,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             cfgW = w; cfgH = h; cfgMime = VideoDecoder.mimeFor(codec); gotKeyframe = false
             maybeCreateDecoder()
         }
-        runOnUiThread { vW = w; vH = h; fitSurface(); setStatus("已连接 · ${w}×${h} ${codec.uppercase()} · 等待画面…") }
+        runOnUiThread { vW = w; vH = h; lastCodec = codec; fitSurface(); setStatus("已连接 · ${w}×${h} ${codec.uppercase()} · 等待画面…") }
     }
 
     /** Size the SurfaceView to the video's aspect ratio, centered — undistorted, minimal black bars. */
@@ -244,11 +291,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun setStatus(s: String) {
+        lastStatus = s
         statusView.visibility = View.VISIBLE
         statusView.text = "Superconnect 接收端\n\n$s"
     }
 
     private fun hideStatus() { statusView.visibility = View.GONE }
+
+    /** BACK closes the control panel (if open) instead of exiting; otherwise default. */
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (controlPanel != null) { hideControlPanel(); return }
+        @Suppress("DEPRECATION") super.onBackPressed()
+    }
 
     /** TOFU prompt for an unknown LAN Mac (wireless). 允许 → trust+proceed, 拒绝 → reject. Runs on the UI
      *  thread; the tap echoes `promptId` back via WirelessService.respondPairing so a stale tap (its prompt

@@ -35,4 +35,18 @@ enum SystemPermissions {
         if !ScreenCapture.hasScreenRecordingPermission() { ScreenCapture.requestScreenRecordingPermission() }
         if !InputInjector.hasAccessibilityPermission() { InputInjector.requestAccessibilityPermission() }
     }
+
+    /// Reset THIS app's Accessibility (input-injection) grant and re-prompt. For the rare stale-TCC case
+    /// where the toggle shows authorized but `CGEventPost` is inert. The free app isn't sandboxed, so it
+    /// may spawn `tccutil`; resetting its OWN bundle id needs no extra privilege. Re-prompts afterward so
+    /// macOS re-evaluates the current binary (then the user re-ticks it in System Settings if asked).
+    static func resetAccessibility() {
+        let bid = Bundle.main.bundleIdentifier ?? "com.superconnect.free"
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        p.arguments = ["reset", "Accessibility", bid]
+        try? p.run()
+        p.waitUntilExit()
+        InputInjector.requestAccessibilityPermission()
+    }
 }

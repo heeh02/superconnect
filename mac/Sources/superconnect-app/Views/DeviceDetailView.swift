@@ -36,6 +36,10 @@ struct DeviceDetailView: View {
                         }
                         Text("越高越清晰、越占带宽。连接时拖动实时生效；未连接时的设置会在连接后应用。")
                             .font(.caption).foregroundStyle(.tertiary)
+                        Divider()
+                        Toggle("强制 H.264（兼容模式）", isOn: $vm.forceH264)
+                        Text("个别安卓设备的 HEVC 解码异常（黑屏/花屏）时开启；默认自动协商（优先 HEVC）。切换在下次连接生效。")
+                            .font(.caption).foregroundStyle(.tertiary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
@@ -52,9 +56,14 @@ struct DeviceDetailView: View {
                         if !(vm.screenRecordingOK && vm.accessibilityOK) {
                             Button("授予权限 / 打开系统设置") { vm.requestPermissions() }
                                 .controlSize(.small)
-                            Text("重新打包应用后权限会被系统重置，需重新授予。")
-                                .font(.caption).foregroundStyle(.tertiary)
                         }
+                        // Safety net: 辅助功能 shows 已授权 but触控/手写仍无效 ⇒ a stale TCC entry; reset & re-grant.
+                        if vm.accessibilityOK {
+                            Button("已授权却无触控？重置并重新授权辅助功能") { vm.regrantAccessibility() }
+                                .controlSize(.small)
+                        }
+                        Text("本应用使用稳定签名，权限会跨重新构建保留，正常无需重授；仅在「已授权却无效」时用上面的重置。")
+                            .font(.caption).foregroundStyle(.tertiary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
