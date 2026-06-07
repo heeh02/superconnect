@@ -9,3 +9,9 @@ captures/
 
 # manual-build output
 app-debug.apk
+app-release.apk
+
+# release signing secrets — NEVER commit (each maintainer holds their own; see sign-release.md)
+keystore.properties
+*.keystore
+*.jks

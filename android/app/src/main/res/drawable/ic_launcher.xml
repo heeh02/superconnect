@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher icon as a VectorDrawable so it works on API 24+ with no per-density PNGs. A blue rounded
+     square with a white screen showing a cast/play glyph + a small stand — reads as "screen casting". -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- rounded blue background -->
+    <path
+        android:fillColor="#2E7DF6"
+        android:pathData="M24,0 L84,0 C97.3,0 108,10.7 108,24 L108,84 C108,97.3 97.3,108 84,108 L24,108 C10.7,108 0,97.3 0,84 L0,24 C0,10.7 10.7,0 24,0 Z" />
+    <!-- white screen / monitor -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M31,33 L77,33 C79.2,33 81,34.8 81,37 L81,65 C81,67.2 79.2,69 77,69 L31,69 C28.8,69 27,67.2 27,65 L27,37 C27,34.8 28.8,33 31,33 Z" />
+    <!-- cast / play triangle inside the screen -->
+    <path
+        android:fillColor="#2E7DF6"
+        android:pathData="M49,43 L65,51 L49,59 Z" />
+    <!-- stand -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M45,73 L63,73 L63,77 L45,77 Z" />
+</vector>
