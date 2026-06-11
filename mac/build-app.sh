@@ -112,8 +112,11 @@ echo "  Grant Screen Recording + Accessibility ONCE; the grant now sticks across
 
 if [[ $DIST == 1 ]]; then
   echo "▸ packaging shareable zip…"
-  ( cd "$HOME/Desktop" && rm -f Superconnect.app.zip && ditto -c -k --keepParent "Superconnect.app" "Superconnect.app.zip" )
-  echo "✓ $HOME/Desktop/Superconnect.app.zip"
+  # Zip the app we actually built ($APP) — not a hardcoded name — so build-free-app.sh --dist
+  # correctly packages superconnect_free.app instead of the mainline bundle.
+  APP_DIR="$(dirname "$APP")"; APP_BASE="$(basename "$APP")"
+  ( cd "$APP_DIR" && rm -f "$APP_BASE.zip" && ditto -c -k --keepParent "$APP_BASE" "$APP_BASE.zip" )
+  echo "✓ $APP_DIR/$APP_BASE.zip"
   echo "  Share this zip. First open on another Mac: right-click the app → 打开 (Open) → 打开,"
-  echo "  or run:  xattr -dr com.apple.quarantine /Applications/Superconnect.app"
+  echo "  or run:  xattr -dr com.apple.quarantine '/Applications/$APP_BASE'"
 fi

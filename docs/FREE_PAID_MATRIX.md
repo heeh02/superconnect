@@ -59,6 +59,9 @@ paid leakage).
   explicitly: “Free includes X · Paid (Supporter+) adds Y”.
 - **Adding a feature:** decide free vs paid FIRST. Free → land on `dev`, update §2. Paid → land on
   `private` behind the gate, never touch `dev`’s feature code path.
+- **One free version number across all three platforms**, bumped in lockstep (mac `Info.plist` ·
+  harmony `AppScope/app.json5` · android `app/build.gradle.kts`). Packaging steps: `RELEASING.md`.
+  Current free release: **0.2.0**.
 
 ## 4. Cross‑device installability (Android free)
 

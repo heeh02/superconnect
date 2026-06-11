@@ -2,9 +2,11 @@
   "app": {
     "bundleName": "com.superconnect.pad",
     "vendor": "superconnect",
-    "versionCode": 1000000,
-    "versionName": "1.0.0",
-    "buildVersion": "1",
+    // Free-edition release version — kept in lockstep with mac (Info.plist) + android (build.gradle.kts).
+    // versionCode only ever increases (in-place updates); 1000000 was the pre-versioning dev install.
+    "versionCode": 1000001,
+    "versionName": "0.2.0",
+    "buildVersion": "2",
     "icon": "$media:layered_image",
     "label": "$string:app_name"
   }

@@ -26,8 +26,9 @@ android {
         applicationId = "com.superconnect.receiver"
         minSdk = 24          // Android 7 — broad coverage incl. older Huawei Android tablets
         targetSdk = 35
+        // Free-edition release version — kept in lockstep with mac (Info.plist) + harmony (app.json5).
         versionCode = 2
-        versionName = "0.2"
+        versionName = "0.2.0"
     }
 
     signingConfigs {
