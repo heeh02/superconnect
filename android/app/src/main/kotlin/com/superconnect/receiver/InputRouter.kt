@@ -84,18 +84,33 @@ class InputRouter(
     }
 
     // ── Stylus pen path (verified pressure/tilt; single tracked contact). Marks pen activity. ──
+    //    Binds ink to the STYLUS pointer by id and follows it across multi-touch: the stylus may land or
+    //    lift as a SECONDARY pointer (POINTER_DOWN/UP) when a palm/finger is co-present. Mirrors harmony's
+    //    findPen()-by-penId so a resting palm never strands the pen's down or up.
     private fun onPen(ev: MotionEvent) {
         lastPenMs = SystemClock.uptimeMillis()
         when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                penDown = true
-                inkId = ev.getPointerId(ev.actionIndex)
-                emitPen(ev, ev.actionIndex, InputType.TOUCH_DOWN.value, InputButtons.PRIMARY)
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val ai = ev.actionIndex
+                val t = ev.getToolType(ai)
+                if (t == MotionEvent.TOOL_TYPE_STYLUS || t == MotionEvent.TOOL_TYPE_ERASER) {
+                    penDown = true
+                    inkId = ev.getPointerId(ai)
+                    emitPen(ev, ai, InputType.TOUCH_DOWN.value, InputButtons.PRIMARY)
+                }
             }
             MotionEvent.ACTION_MOVE -> {
                 if (inkId < 0) return
                 val pi = ev.findPointerIndex(inkId); if (pi < 0) return
                 emitPen(ev, pi, InputType.TOUCH_MOVE.value, InputButtons.PRIMARY)
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                // a contact lifted while others remain — release ink only if it is the stylus contact
+                if (inkId >= 0 && ev.getPointerId(ev.actionIndex) == inkId) {
+                    penDown = false
+                    emitPen(ev, ev.actionIndex, InputType.TOUCH_UP.value, 0)
+                    inkId = -1
+                }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 penDown = false
@@ -119,6 +134,13 @@ class InputRouter(
                 if (inkId < 0) return
                 val pi = ev.findPointerIndex(inkId); if (pi < 0) return
                 emitPen(ev, pi, InputType.TOUCH_MOVE.value, InputButtons.PRIMARY)
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                // the inking finger lifted while extra fingers remain — end the single stroke cleanly
+                if (inkId >= 0 && ev.getPointerId(ev.actionIndex) == inkId) {
+                    emitPen(ev, ev.actionIndex, InputType.TOUCH_UP.value, 0)
+                    inkId = -1
+                }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (inkId < 0) return

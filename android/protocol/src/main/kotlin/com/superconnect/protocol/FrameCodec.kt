@@ -62,15 +62,20 @@ class FrameDecoder {
             val b = cursor
             val channel = buffer[b].toInt() and 0xff
             val flags = buffer[b + 1].toInt() and 0xff
-            val len = (buffer[b + 2].toInt() and 0xff) or
-                ((buffer[b + 3].toInt() and 0xff) shl 8) or
-                ((buffer[b + 4].toInt() and 0xff) shl 16) or
-                ((buffer[b + 5].toInt() and 0xff) shl 24)
+            // Decode the u32 length as UNSIGNED (accumulate in a Long). A Kotlin Int is signed, so a length
+            // with bit 31 set (e.g. 0xFFFFFFFF) would read negative and skip the MAX_PAYLOAD guard below —
+            // diverging from the Swift/C++/ArkTS codecs, which all treat it unsigned and reject >16 MiB as a
+            // protocol error (proto/protocol.md). Keeping it unsigned makes the four codecs byte-identical.
+            val len = (buffer[b + 2].toLong() and 0xff) or
+                ((buffer[b + 3].toLong() and 0xff) shl 8) or
+                ((buffer[b + 4].toLong() and 0xff) shl 16) or
+                ((buffer[b + 5].toLong() and 0xff) shl 24)
             if (len > FrameCodec.MAX_PAYLOAD) throw IllegalStateException("frame payload too large: $len")
-            val total = FrameCodec.HEADER_SIZE + len
+            val payloadLen = len.toInt()   // safe: the guard above bounds len to <= 16 MiB
+            val total = FrameCodec.HEADER_SIZE + payloadLen
             if (buffer.size - b < total) break   // wait for more bytes
             val start = b + FrameCodec.HEADER_SIZE
-            frames.add(Frame(channel, flags, buffer.copyOfRange(start, start + len)))
+            frames.add(Frame(channel, flags, buffer.copyOfRange(start, start + payloadLen)))
             cursor += total
         }
         if (cursor > 0) buffer = buffer.copyOfRange(cursor, buffer.size)

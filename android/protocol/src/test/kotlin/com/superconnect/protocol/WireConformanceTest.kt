@@ -57,6 +57,32 @@ class WireConformanceTest {
         assertEquals("6869", hex(collected[0].payload))
     }
 
+    @Test fun frameDecoderHandlesCoalescing() {
+        // Two whole frames arriving in ONE push must both decode, in order (parity with Swift/C++).
+        val two = unhex("0000020000006869" + "020104000000deadbeef")
+        val frames = FrameDecoder().push(two)
+        assertEquals(2, frames.size)
+        assertEquals(0, frames[0].channel); assertEquals("6869", hex(frames[0].payload))
+        assertEquals(2, frames[1].channel); assertEquals(1, frames[1].flags)
+        assertEquals("deadbeef", hex(frames[1].payload))
+    }
+
+    @Test fun frameDecoderRejectsOversizeLength() {
+        // The u32 length is UNSIGNED: a length above 16 MiB — including one with bit 31 set, which a signed
+        // Int would read negative — must be rejected the same way as Swift/C++/ArkTS, not silently accepted.
+        val b = 0xFF.toByte()
+        // header = channel 00, flags 00, length (4 bytes, little-endian):
+        val cases = mapOf(
+            "16MiB+1 (0x01000001)" to byteArrayOf(0, 0, /*len*/ 0x01, 0x00, 0x00, 0x01),
+            "0xFFFFFFFF (bit31 set)" to byteArrayOf(0, 0, /*len*/ b, b, b, b),
+        )
+        for ((name, header) in cases) {
+            var threw = false
+            try { FrameDecoder().push(header) } catch (_: IllegalStateException) { threw = true }
+            assertEquals("oversize length $name must be rejected", true, threw)
+        }
+    }
+
     @Test fun inputRecordSize() {
         assertEquals(vectors().getInt("inputRecordSize"), InputCodec.RECORD_SIZE)
     }

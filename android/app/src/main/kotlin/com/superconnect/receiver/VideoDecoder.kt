@@ -93,7 +93,15 @@ class VideoDecoder(
 
     fun stop() {
         running = false
-        worker?.interrupt()
+        // Join the worker BEFORE releasing the codec. The worker loop calls dequeue/queue/release on the
+        // same MediaCodec instance; stopping/releasing it from another thread while the worker is mid-call is
+        // concurrent single-codec use — it can throw IllegalStateException or abort in native code (SIGABRT),
+        // which the worker's `catch (Exception)` cannot intercept. running=false makes the loop exit within one
+        // iteration (≤5 ms blocked in dequeueInputBuffer); join bounds the wait so teardown never hangs.
+        val w = worker
+        worker = null
+        w?.interrupt()
+        try { w?.join(500) } catch (_: InterruptedException) {}
         try { codec?.stop() } catch (_: Exception) {}
         try { codec?.release() } catch (_: Exception) {}
         codec = null
