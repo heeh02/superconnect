@@ -6,6 +6,9 @@ import com.superconnect.protocol.FrameDecoder
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import kotlin.concurrent.thread
 
 /**
@@ -49,10 +52,16 @@ class TcpServerTransport(
     private var server: ServerSocket? = null
     @Volatile private var client: Socket? = null
     private val sendLock = Any()
+    // All back-channel writes (INPUT / pong / hello_ack / request_keyframe) run here, NOT on the caller's
+    // thread. INPUT and keyboard are dispatched from the UI/main thread, and Android forbids a socket write
+    // on the main thread (NetworkOnMainThreadException) — which silently dropped every input event. A single
+    // worker keeps writes ordered and off whatever thread enqueued them.
+    @Volatile private var sender: ExecutorService? = null
 
     fun start() {
         if (running) return
         running = true
+        sender = Executors.newSingleThreadExecutor { r -> Thread(r, "sc-tcp-send").apply { isDaemon = true } }
         thread(name = "sc-tcp-server", isDaemon = true) { serveLoop() }
     }
 
@@ -121,19 +130,27 @@ class TcpServerTransport(
         }
     }
 
-    /** Frame already encoded by the caller (FrameCodec). No-op if no client. */
+    /** Frame already encoded by the caller (FrameCodec). The write is handed to the sender thread so it
+     *  never runs on the caller's thread (INPUT/keyboard come from the UI thread). No-op if no client. */
     fun send(bytes: ByteArray) {
-        val c = client ?: return
-        synchronized(sendLock) {
-            try {
-                val out = c.getOutputStream()
-                out.write(bytes); out.flush()
-            } catch (e: Exception) { log("send err $e") }
-        }
+        if (client == null) return
+        val ex = sender ?: return
+        try {
+            ex.execute {
+                val c = client ?: return@execute
+                synchronized(sendLock) {
+                    try {
+                        val out = c.getOutputStream()
+                        out.write(bytes); out.flush()
+                    } catch (e: Exception) { log("send err $e") }
+                }
+            }
+        } catch (_: RejectedExecutionException) { /* transport stopping — drop */ }
     }
 
     fun stop() {
         running = false
+        sender?.shutdownNow(); sender = null
         try { client?.close() } catch (_: Exception) {}
         try { server?.close() } catch (_: Exception) {}
         client = null; server = null
