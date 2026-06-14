@@ -24,6 +24,11 @@ protocol ConnectionEngine: AnyObject {
     /// looped on "Connection refused" forever. nil result ⇒ keep the current target. Wireless reopen is
     /// a no-op (same host:port). Host-only; the receiver stub inherits the no-op default.
     func setTunnelReopen(_ reopen: (() async -> TunnelTarget?)?)
+    /// Force a reconnect on system WAKE. Across sleep the SCStream dies and the CGVirtualDisplay is
+    /// invalidated without raising any TCP/producer error, so the passive heartbeat is slow (or, on a
+    /// half-open socket, never) to notice. The coordinator fans this out to every live link on
+    /// NSWorkspace.didWake; the engine rebuilds a FRESH display + capture. No-op when not live.
+    func wakeReconnect()
 }
 
 extension ConnectionEngine {
@@ -36,4 +41,6 @@ extension ConnectionEngine {
     func setAvoidVirtualInterfaces(_ avoid: Bool) {}
     /// Default: ignore — only the host dials out, so only it needs to re-establish a wired tunnel.
     func setTunnelReopen(_ reopen: (() async -> TunnelTarget?)?) {}
+    /// Default: ignore — a stub engine has nothing to rebuild on wake.
+    func wakeReconnect() {}
 }

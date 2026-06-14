@@ -175,6 +175,13 @@ final class ConnectionCoordinator: ObservableObject {
         for id in Array(conns.keys) { disconnect(deviceID: id) }
     }
 
+    /// System WAKE: force every live link to rebuild (fresh virtual display + capture + redial). Fans the
+    /// signal to all managed engines — idle/disconnected ones no-op (running=false). The engine owns the
+    /// teardown+rebuild (same decoupling as the wired re-forward self-heal); the coordinator only fans out.
+    func reconnectAllForWake() {
+        for mc in conns.values { mc.engine.wakeReconnect() }
+    }
+
     /// Read-only projection of the live links for `ConnectionPolicy` (no internals leak out).
     private func liveLinkInfos() -> [LiveLinkInfo] {
         conns.values.map { mc in

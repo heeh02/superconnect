@@ -19,6 +19,10 @@ final class HostConnection: ConnectionEngine {
     private let maxFps = 120
     private var pairingToken: String?   // wireless BLE proximity token to present in hello (nil = none)
     private var avoidVirtualInterfaces = false   // wireless: dial over physical NIC, excluding VPN/utun
+    // Set once we've already fallen back from the physical-NIC pin to default routing for a wireless
+    // target (see the connect-timeout watchdog). Prevents an infinite pin→default→pin oscillation and
+    // keeps the final error classified as wireless. Reset on a fresh connect().
+    private var triedDefaultRoute = false
     // Consecutive connect-timeout watchdog trips. A VPN/EasyConnect route hijack makes every dial time
     // out, and the plain retry loop would re-attempt forever; after this many in a row we stop with a
     // clear error instead of spinning. Reset on a real connect (onConnected) and on a fresh connect().
@@ -80,6 +84,7 @@ final class HostConnection: ConnectionEngine {
             self.generation += 1
             let gen = self.generation
             self.consecutiveTimeouts = 0   // fresh user-initiated connect → reset the timeout streak
+            self.triedDefaultRoute = false // re-allow the physical-pin → default-route fallback this connect
             self.tele = SessionTelemetry(); self.tele.bitrateMbps = self.bitrateMbps
             self.stateSubject.send(.connecting)
             if !self.guardRetained { DisplayModeGuard.shared.retain(); self.guardRetained = true }   // pin real-display resolution before adding the virtual one
@@ -135,6 +140,21 @@ final class HostConnection: ConnectionEngine {
     private var reopenTunnel: (() async -> TunnelTarget?)?
     func setTunnelReopen(_ reopen: (() async -> TunnelTarget?)?) {
         lifeQ.async { self.reopenTunnel = reopen }
+    }
+
+    /// Force a reconnect on system WAKE. Across sleep the SCStream silently dies and the CGVirtualDisplay
+    /// is invalidated WITHOUT raising any TCP/producer error, so the passive heartbeat is slow (≈6s) or —
+    /// on a half-open socket — never notices. Drive the existing retry() immediately so it tears down and
+    /// rebuilds a FRESH virtual display + capture (buildPipeline). No-op if this engine isn't live.
+    /// Routed through retry() on lifeQ → shares the generation guard, so it can't race / double up with a
+    /// heartbeat-driven retry. Satisfies `ConnectionEngine`.
+    func wakeReconnect() {
+        lifeQ.async {
+            guard self.running else { return }
+            self.diag("system wake → forcing reconnect (rebuild display + capture)")
+            self.consecutiveTimeouts = 0   // wake is not a connectivity failure; don't count it toward the cap
+            self.retry(gen: self.generation)
+        }
     }
 
     /// Live bitrate change (clamped 10–100 Mbps). Retunes the running encoder immediately AND is read
@@ -222,7 +242,21 @@ final class HostConnection: ConnectionEngine {
                 if msg.contains("connect timeout") {
                     self.consecutiveTimeouts += 1
                     if self.consecutiveTimeouts >= self.maxConsecutiveTimeouts {
-                        let reason: AppError = self.avoidVirtualInterfaces ? .wirelessUnreachable : .tunnelFailed
+                        // A wireless dial PINNED to the physical NIC (en0) never reached the tablet. The
+                        // classic cause is a full-tunnel VPN (EasyConnect) capturing every route so there
+                        // is no physical-LAN path at all. Before giving up, fall back ONCE to default
+                        // routing (unpinned): it connects whenever any route exists, trading the
+                        // LAN-direct guarantee for reachability. Only if THAT also times out do we surface
+                        // a fatal — still classified wireless so the UI shows the right guidance.
+                        if self.avoidVirtualInterfaces && !self.triedDefaultRoute {
+                            self.triedDefaultRoute = true
+                            self.avoidVirtualInterfaces = false
+                            self.consecutiveTimeouts = 0
+                            self.diag("wireless en0-pin unreachable (likely a full-tunnel VPN) — retrying over the default route")
+                            self.retry(gen: gen)
+                            return
+                        }
+                        let reason: AppError = (self.avoidVirtualInterfaces || self.triedDefaultRoute) ? .wirelessUnreachable : .tunnelFailed
                         self.diag("connect timeout x\(self.consecutiveTimeouts) — fatal (\(reason))")
                         self.generation += 1
                         self.running = false

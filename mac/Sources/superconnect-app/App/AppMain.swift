@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var window: NSWindow!
     private var bag = Set<AnyCancellable>()
+    private var wakeObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMainMenu()
@@ -57,6 +58,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.statusItem.button?.image = img
             }
             .store(in: &bag)
+
+        // System WAKE → force every live link to rebuild. Across sleep the SCStream dies and the virtual
+        // display is invalidated with no error surfaced, so the passive heartbeat is slow/blind to it.
+        // Debounce ~1s so the GPU/display subsystem finishes re-enumerating before we recreate a virtual
+        // display (else ScreenCapture can't find it in SCShareableContent).
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self?.env.coordinator.reconnectAllForWake()
+            }
+        }
     }
 
     @objc private func showWindow(_ sender: Any?) {
@@ -71,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         env.coordinator.disconnectAll()
         env.store.stop()
     }
