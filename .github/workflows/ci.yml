@@ -1,0 +1,41 @@
+name: CI
+
+# Enforce what was previously only an advisory manual check: the 4-language wire-protocol conformance
+# harness (Swift/C++/ArkTS/Kotlin must agree byte-for-byte on proto/vectors.json) plus the unit tests.
+# A single forgotten run on a codec edit is exactly the green-screen/garbled-decode class of bug the
+# harness exists to prevent — CI makes it authoritative.
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+jobs:
+  conformance-and-tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Cross-language wire conformance (Swift + C++ + ArkTS vs proto/vectors.json)
+        run: zsh tools/check-protocol.sh
+
+      - name: Android protocol unit tests (pure-JVM library module)
+        working-directory: android
+        run: gradle --no-daemon :protocol:test
+
+      - name: macOS core build + unit tests (codec / UDP packet / transport)
+        working-directory: mac
+        run: |
+          swift build
+          swift test

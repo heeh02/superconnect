@@ -33,7 +33,7 @@ final class HdcFportTunnel: TunnelService {
         // it, another process can grab the port (a TOCTOU window) → fport fails. Retry up to 3× with a
         // fresh local port before giving up, so a transient race doesn't fail the whole connect.
         for _ in 0..<3 {
-            let local = LocalPort.free() ?? remote   // unique per device; fall back to the remote port (single-device)
+            guard let local = LocalPort.free() else { continue }   // no free port this round → retry; NEVER reuse the shared device port as a local (it would collide across CONCURRENT wired devices, breaking #51 multi-device)
             if HdcTool.fport(serial: serial, local: local, remote: remote) {
                 opened = (serial, local, remote)
                 return .dial(host: "127.0.0.1", port: local)
@@ -59,7 +59,7 @@ final class AdbFportTunnel: TunnelService {
         guard AdbTool.path() != nil else { throw AppError.hdcNotFound }   // reuse "bridge missing" error
         // Same TOCTOU guard as hdc: free()→forward window can race; retry with a fresh local port.
         for _ in 0..<3 {
-            let local = LocalPort.free() ?? remote
+            guard let local = LocalPort.free() else { continue }   // see HdcFportTunnel: never reuse the shared device port — concurrent wired devices would collide on it
             if AdbTool.forward(serial: serial, local: local, remote: remote) {
                 opened = (serial, local, remote)
                 return .dial(host: "127.0.0.1", port: local)
