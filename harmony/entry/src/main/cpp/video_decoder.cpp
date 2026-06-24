@@ -33,12 +33,21 @@ bool VideoDecoder::start(OHNativeWindow* window, int32_t width, int32_t height) 
     codec_ = OH_VideoDecoder_CreateByMime(codecMime_.c_str());
     if (codec_ == nullptr) return false;
 
+    // Any failure AFTER create must destroy + null the codec, or the next start() (driven by rotation /
+    // SetVideoSize → tryStart) overwrites codec_ and orphans this HW instance forever — exhausting the
+    // scarce system codec pool on a persistently-failing config. Helper guarantees codec_==null on failure.
+    auto fail = [this]() -> bool {
+        OH_VideoDecoder_Destroy(codec_);
+        codec_ = nullptr;
+        return false;
+    };
+
     OH_AVCodecCallback cb;
     cb.onError = OnErrorCb;
     cb.onStreamChanged = OnStreamChangedCb;
     cb.onNeedInputBuffer = OnNeedInputBufferCb;
     cb.onNewOutputBuffer = OnNewOutputBufferCb;
-    if (OH_VideoDecoder_RegisterCallback(codec_, cb, this) != AV_ERR_OK) return false;
+    if (OH_VideoDecoder_RegisterCallback(codec_, cb, this) != AV_ERR_OK) return fail();
 
     OH_AVFormat* format = OH_AVFormat_Create();
     OH_AVFormat_SetIntValue(format, OH_MD_KEY_WIDTH, width_);
@@ -51,21 +60,21 @@ bool VideoDecoder::start(OHNativeWindow* window, int32_t width, int32_t height) 
         OH_AVFormat_SetIntValue(format, OH_MD_KEY_PROFILE, HEVC_PROFILE_MAIN_10);
     }
     int32_t cfg = OH_VideoDecoder_Configure(codec_, format);
-    OH_AVFormat_Destroy(format);
-    if (cfg != AV_ERR_OK) return false;
+    OH_AVFormat_Destroy(format);   // format freed regardless; fail() below only frees the codec
+    if (cfg != AV_ERR_OK) return fail();
 
     // Surface mode: bind the output window AFTER Configure. (Verified on a
     // HarmonyOS 6.1 device — calling SetSurface before Configure returns
     // "set output surface failed".)
-    if (OH_VideoDecoder_SetSurface(codec_, window_) != AV_ERR_OK) return false;
+    if (OH_VideoDecoder_SetSurface(codec_, window_) != AV_ERR_OK) return fail();
 
     if (hdr_ && window_ != nullptr) {
         // Tell the compositor this surface is BT.2020 PQ (video-range) → it presents HDR.
         OH_NativeWindow_SetColorSpace(window_, OH_COLORSPACE_BT2020_PQ_LIMIT);
     }
 
-    if (OH_VideoDecoder_Prepare(codec_) != AV_ERR_OK) return false;
-    if (OH_VideoDecoder_Start(codec_) != AV_ERR_OK) return false;
+    if (OH_VideoDecoder_Prepare(codec_) != AV_ERR_OK) return fail();
+    if (OH_VideoDecoder_Start(codec_) != AV_ERR_OK) return fail();
 
     started_ = true;
     return true;

@@ -12,6 +12,11 @@ public final class DisplayModeGuard {
     private var saved: [CGDirectDisplayID: CGDisplayMode] = [:]
     private var restoring = false
     private var active = false
+    /// Guards `saved`/`active`/`restoring` — these are touched from the CG reconfiguration callback
+    /// (arbitrary thread), from start()/stop() (lifeQ via retain/release), and from the async restore
+    /// block (global queue). Distinct from `refLock` (refcount-only). CG calls are made OUTSIDE this
+    /// lock so a reconfiguration callback re-entering during a restore can't deadlock.
+    private let stateLock = NSLock()
 
     public init() {}
 
@@ -45,17 +50,22 @@ public final class DisplayModeGuard {
 
     /// Snapshot the current (pre-virtual-display) mode of every active display, then start guarding.
     public func start() {
-        guard !active else { return }
-        saved = Self.activeDisplayModes()
+        let modes = Self.activeDisplayModes()   // CG query outside the lock
+        stateLock.lock()
+        guard !active else { stateLock.unlock(); return }
+        saved = modes
         active = true
+        stateLock.unlock()
         CGDisplayRegisterReconfigurationCallback(Self.cb, Unmanaged.passUnretained(self).toOpaque())
     }
 
     public func stop() {
-        guard active else { return }
+        stateLock.lock()
+        guard active else { stateLock.unlock(); return }
         active = false
-        CGDisplayRemoveReconfigurationCallback(Self.cb, Unmanaged.passUnretained(self).toOpaque())
         saved = [:]
+        stateLock.unlock()
+        CGDisplayRemoveReconfigurationCallback(Self.cb, Unmanaged.passUnretained(self).toOpaque())
     }
 
     private static func activeDisplayModes() -> [CGDirectDisplayID: CGDisplayMode] {
@@ -81,19 +91,26 @@ public final class DisplayModeGuard {
     }
 
     private func handle(_ display: CGDirectDisplayID, _ flags: CGDisplayChangeSummaryFlags) {
+        guard flags.contains(.setModeFlag), !flags.contains(.beginConfigurationFlag) else { return }
+        // Arm the restore under the lock so two back-to-back callbacks can't both pass the guard, and
+        // snapshot `want` so the async body never touches `saved` off-lock.
+        stateLock.lock()
         guard active, !restoring,
-              flags.contains(.setModeFlag), !flags.contains(.beginConfigurationFlag),
               let want = saved[display],
-              let cur = CGDisplayCopyDisplayMode(display), !Self.equal(cur, want) else { return }
+              let cur = CGDisplayCopyDisplayMode(display), !Self.equal(cur, want) else { stateLock.unlock(); return }
         restoring = true
+        stateLock.unlock()
         DispatchQueue.global().async { [weak self] in
-            guard let self, self.active else { self?.restoring = false; return }
-            var cfg: CGDisplayConfigRef?
-            if CGBeginDisplayConfiguration(&cfg) == .success, let cfg {
-                CGConfigureDisplayWithDisplayMode(cfg, display, want, nil)   // pin back to the user's mode
-                _ = CGCompleteDisplayConfiguration(cfg, .forSession)
+            guard let self else { return }
+            self.stateLock.lock(); let stillActive = self.active; self.stateLock.unlock()
+            if stillActive {
+                var cfg: CGDisplayConfigRef?
+                if CGBeginDisplayConfiguration(&cfg) == .success, let cfg {
+                    CGConfigureDisplayWithDisplayMode(cfg, display, want, nil)   // pin back to the user's mode (CG call OFF-lock)
+                    _ = CGCompleteDisplayConfiguration(cfg, .forSession)
+                }
             }
-            self.restoring = false
+            self.stateLock.lock(); self.restoring = false; self.stateLock.unlock()
         }
     }
 }

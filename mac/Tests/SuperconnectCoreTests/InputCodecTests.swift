@@ -51,4 +51,17 @@ final class InputCodecTests: XCTestCase {
             + "0000" + "0000"   // keyCode, pointerId
         XCTAssertEqual(InputCodec.encode(sample()).hexEncodedString, golden)
     }
+
+    func testGoldenVectorAllFieldsDistinct() {
+        // Byte-pins EVERY field with a distinct, nonzero value (proto/vectors.json `input-all-fields-distinct`),
+        // so a cross-language field transposition can't pass silently the way it can against the all-zero
+        // `sample()` vector. timestampMs=1234567890123 (> 2^32) specifically pins the u64 byte order / the
+        // ArkTS hi/lo split. Keep this hex identical to the JSON `recordHex` and the ArkTS runner's assertion.
+        let e = InputEvent(type: 2, tool: 2, buttons: 3, flags: 5, timestampMs: 1234567890123,
+                           x: 0.5, y: 0.25, pressure: 0.75, tiltX: 10.0, tiltY: -20.0,
+                           scrollX: 3.5, scrollY: -7.25, keyCode: 0x1234, pointerId: 0x5678)
+        XCTAssertEqual(InputCodec.encode(e).hexEncodedString,
+                       "02020305cb04fb711f0100000000003f0000803e0000403f000020410000a0c1000060400000e8c034127856")
+        XCTAssertEqual(InputCodec.decode(InputCodec.encode(e)), e)   // round-trip too
+    }
 }

@@ -62,18 +62,30 @@ class VideoDecoder(
         val info = MediaCodec.BufferInfo()
         var rendered = 0
         var fed = 0
-        try {
-            while (running) {
+        var errs = 0   // consecutive recoverable errors; give up only if the codec is truly wedged
+        // The try/catch is INSIDE the loop so ONE bad frame/buffer can't kill the worker permanently
+        // (which froze the picture while the session still showed "connected"). A single bad buffer is
+        // dropped and decoding continues; only a persistently-wedged codec exits.
+        while (running) {
+            try {
                 if (heldInput < 0) heldInput = c.dequeueInputBuffer(5_000)
                 if (heldInput >= 0) {
                     val frame = nextFrame(5)
                     if (frame != null) {
                         val ib = c.getInputBuffer(heldInput)
                         if (ib != null) {
-                            ib.clear(); ib.put(frame)
-                            c.queueInputBuffer(heldInput, 0, frame.size, ptsUs, 0)
-                            ptsUs += 16_666   // ~60 fps spacing; PTS only needs to be monotonic for display
-                            if (++fed <= 2) log("fed input #$fed (${frame.size}B)")
+                            if (ib.capacity() < frame.size) {
+                                // A single NAL can't span input buffers; a frame larger than the codec's
+                                // input buffer (e.g. a big keyframe) would throw BufferOverflowException and,
+                                // before this guard, kill the worker. Drop it — the Mac's periodic keyframe
+                                // (~1s) re-anchors the stream.
+                                log("input buffer too small: cap=${ib.capacity()} need=${frame.size}, dropping")
+                            } else {
+                                ib.clear(); ib.put(frame)
+                                c.queueInputBuffer(heldInput, 0, frame.size, ptsUs, 0)
+                                ptsUs += 16_666   // ~60 fps spacing; PTS only needs to be monotonic for display
+                                if (++fed <= 2) log("fed input #$fed (${frame.size}B)")
+                            }
                         }
                         heldInput = -1
                     }
@@ -85,9 +97,15 @@ class VideoDecoder(
                     if (++rendered == 1) log("FIRST FRAME RENDERED ✓")
                     outIdx = c.dequeueOutputBuffer(info, 0)
                 }
+                errs = 0
+            } catch (e: IllegalStateException) {
+                // Codec in a fatal/wedged state (e.g. stop() racing this call) — exit; stop()/reconfigure rebuilds it.
+                log("decoder loop fatal $e"); break
+            } catch (e: Exception) {
+                // Recoverable (e.g. a bad buffer slipped past the guard): drop the held slot and keep going.
+                heldInput = -1
+                if (++errs >= 30) { log("decoder loop giving up after $errs consecutive errors: $e"); break }
             }
-        } catch (e: Exception) {
-            log("decoder loop err $e")
         }
     }
 

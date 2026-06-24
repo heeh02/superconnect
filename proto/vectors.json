@@ -52,6 +52,25 @@
       "keyCode": 0,
       "pointerId": 0,
       "recordHex": "0101010000000000000000000000003f0000803e0000803f0000000000000000000000000000000000000000"
+    },
+    {
+      "_comment": "All fields DISTINCT and NONZERO so a cross-language field transposition can't pass silently. timestampMs (1234567890123 = 0x11F71FB04CB) is > 2^32 so the u64 hi half is NONZERO (hi=287, lo=1912276171) — this pins the ArkTS hi/lo split + divisor that the all-zero vector never exercised — yet stays < 2^53 so it survives JSON.parse as an exact JS Number (real epoch-ms are this magnitude).",
+      "name": "input-all-fields-distinct",
+      "type": 2,
+      "tool": 2,
+      "buttons": 3,
+      "flags": 5,
+      "timestampMs": 1234567890123,
+      "x": 0.5,
+      "y": 0.25,
+      "pressure": 0.75,
+      "tiltX": 10.0,
+      "tiltY": -20.0,
+      "scrollX": 3.5,
+      "scrollY": -7.25,
+      "keyCode": 4660,
+      "pointerId": 22136,
+      "recordHex": "02020305cb04fb711f0100000000003f0000803e0000403f000020410000a0c1000060400000e8c034127856"
     }
   ]
 }
