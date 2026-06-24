@@ -2,6 +2,7 @@ import { ConnectionEngine } from '../ConnectionEngine';
 import { ConnectionStatus } from '../../../models/ConnectionStatus';
 import { StreamInfo } from '../../../models/StreamInfo';
 import { TcpServerTransport, ServerStatus } from '../../../transport/TcpServerTransport';
+import { AuthGate } from '../../../session/Session';
 import sc from 'libsuperconnect.so';
 
 // ReceiverConnection — the tablet's REAL role: receive a screen stream and display it
@@ -13,8 +14,8 @@ export class ReceiverConnection implements ConnectionEngine {
   // Where to bind — supplied by WirelessService via AppEnvironment: '127.0.0.1' (USB only) or
   // '0.0.0.0' (LAN). Read at start() time so a wireless toggle + restart() picks up the new value.
   private bindAddressFn: () => string;
-  // Wireless TOFU gate (null ⇒ no gate). Passed to each transport so LAN clients need approval.
-  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string) => Promise<boolean>) | null;
+  // SC-AUTH-v1 trust gate (null ⇒ no gate). Passed to each transport so wireless clients authenticate.
+  private authGate: AuthGate | null;
   // Fired when the socket starts listening — WirelessService advertises over mDNS when on LAN.
   private onListeningFn: ((address: string, port: number) => void) | null;
   // Fired with a disconnecting client's clientId — WirelessService clears its stale pairing prompt.
@@ -29,12 +30,12 @@ export class ReceiverConnection implements ConnectionEngine {
 
   constructor(port: number,
               bindAddressFn: () => string = (): string => '127.0.0.1',
-              pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string) => Promise<boolean>) | null = null,
+              authGate: AuthGate | null = null,
               onListeningFn: ((address: string, port: number) => void) | null = null,
               onClientGoneFn: ((ownerId: number) => void) | null = null) {
     this.port = port;
     this.bindAddressFn = bindAddressFn;
-    this.pairingGate = pairingGate;
+    this.authGate = authGate;
     this.onListeningFn = onListeningFn;
     this.onClientGoneFn = onClientGoneFn;
   }
@@ -56,7 +57,7 @@ export class ReceiverConnection implements ConnectionEngine {
         this.onStreamInfo?.({ width: width, height: height, codec: codec, hdr: hdr });
         this.onLog?.('decoder armed ' + width + '×' + height + ' ' + codec + ' hdr=' + hdr);
       },
-      this.pairingGate,
+      this.authGate,
     );
     this.transport.onListening = this.onListeningFn;
     this.transport.onClientGone = this.onClientGoneFn;

@@ -31,6 +31,22 @@ const P256_CURVE: string = 'NID_X9_62_prime256v1';  // secp256r1 / P-256
 
 export class AuthCrypto {
   private static readonly enc: util.TextEncoder = new util.TextEncoder();
+  private static readonly b64: util.Base64Helper = new util.Base64Helper();
+
+  // ── wire codec helpers (base64) + the AEAD AAD / HKDF info bytes ────────────
+  /** The SC-PAIR-v1 label as UTF-8 bytes — the AES-GCM AAD passed to seal/open on enrollment. */
+  static pairInfoBytes(): Uint8Array { return AuthCrypto.enc.encodeInto(PAIR_INFO); }
+
+  /** Base64-encode bytes (standard alphabet, padded) — the on-wire representation of all blobs. */
+  static toBase64(bytes: Uint8Array): string { return AuthCrypto.b64.encodeToStringSync(bytes); }
+
+  /** Base64-decode (throws on malformed input). */
+  static fromBase64(s: string): Uint8Array { return AuthCrypto.b64.decodeSync(s); }
+
+  /** Base64-decode, returning null instead of throwing on malformed input (for untrusted wire fields). */
+  static tryFromBase64(s: string): Uint8Array | null {
+    try { return AuthCrypto.b64.decodeSync(s); } catch (e) { return null; }
+  }
 
   // ── HMAC challenge-response (steady state) ─────────────────────────────────
   /** HMAC-SHA256(secret, UTF-8(context)). */

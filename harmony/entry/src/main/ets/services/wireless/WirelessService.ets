@@ -22,13 +22,16 @@ import { PairingStore, TrustedPeer } from './PairingStore';
 import { MdnsAdvertiser } from './MdnsAdvertiser';
 import { BleAdvertiser } from './BleAdvertiser';
 import { deviceDisplayName } from '../DeviceIdentity';
+import { AuthCrypto } from './AuthCrypto';
+import { SecretStore } from './SecretStore';
+import { AuthGate, AuthDecision, AuthVerdict } from '../../session/Session';
 
 const STORE: string = 'sc_wireless';
 const KEY_ENABLED: string = 'enabled';
 const KEY_PEERID: string = 'blePeerId';
 const PAIR_TIMEOUT_MS: number = 60000;   // auto-reject an unanswered pairing prompt after 60s
 
-export class WirelessService {
+export class WirelessService implements AuthGate {
   private prefs: preferences.Preferences | null = null;
   // Privacy default: OFF — no LAN exposure until the user explicitly opts in.
   private enabledFlag: boolean = false;
@@ -43,8 +46,8 @@ export class WirelessService {
   private bleAdvertiser: BleAdvertiser;
   private ctx: common.UIAbilityContext;
   private btGranted: boolean = false;
-  // Pairing token carried over BLE; a Wi‑Fi hello presenting the CURRENT token auto-trusts (proximity
-  // proof a remote LAN replayer can't fake). Rotated each time wireless is enabled.
+  // Pairing token carried over BLE; a discovery hint only — it does NOT grant trust (audit M10).
+  // Rotated each time wireless is enabled.
   private bleToken: string = '';
   // Stable per-install tablet id, embedded in the BLE blob so the Mac can dedupe/identify this tablet.
   private blePeerId: string = '';
@@ -154,7 +157,8 @@ export class WirelessService {
     return buf;
   }
 
-  /** A 16-hex-char (8-byte) token for the BLE advert (small enough to fit; matched in evaluatePairing). */
+  /** A 16-hex-char (8-byte) token for the BLE advert. DEMOTED (audit M10): a discovery hint only — it
+   *  no longer grants trust in decide(), so it's never matched against an incoming hello. */
   private gen16Hex(): string {
     return util.generateRandomUUID(false).split('-').join('').substring(0, 16);
   }
@@ -201,31 +205,33 @@ export class WirelessService {
   // ── Pairing gate ──────────────────────────────────────────────────────────────────────────────
 
   /**
-   * The gate the Session awaits before sending hello_ack. Localhost (hdc/USB) and already-trusted
-   * peers pass instantly; an unknown LAN peer raises a 允许/拒绝 prompt and resolves on the user's tap.
-   * Resolves false (reject) when wireless is off, the peer is anonymous, already denied this run, or
-   * a prompt is unanswered for PAIR_TIMEOUT_MS.
+   * SC-AUTH-v1 trust gate (audit H4) — the decision the Session asks for on `hello`. Returns POLICY
+   * only; the crypto + nonce live in the Session. Verdicts:
+   *  - Exempt : localhost (hdc/USB) → wired stays auth-free (byte-compatible).
+   *  - Steady : a per-pair secret already exists for this Mac → challenge it (no prompt).
+   *  - Enroll : no secret → raise the 允许/拒绝 prompt; `approve` resolves to the user's choice, and on
+   *             允许 we MINT + STORE a fresh 32-byte secret keyed by this Mac's peerId (settlePending),
+   *             so the Session can read it back and seal it into pair_secret.
+   *  - Refuse : wireless off, anonymous peer, already session-denied, or a prompt is already in flight.
+   *
+   * The BLE token is DEMOTED (audit M10): it no longer auto-trusts. A matching token is at most a
+   * discovery hint — every unknown wireless peer still requires an explicit 允许 to enroll a secret.
    */
-  evaluatePairing(peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string): Promise<boolean> {
-    if (isLocalhost) { return Promise.resolve(true); }            // hdc/USB → always trusted
-    if (!this.enabledFlag) { return Promise.resolve(false); }     // wireless off → refuse LAN
-    // BLE proximity proof: a hello carrying the CURRENT bootstrap token (delivered over short-range
-    // BLE, never broadcast on Wi-Fi) auto-trusts this connection — a remote LAN replayer of a sniffed
-    // peerId has no valid token. SESSION-ONLY: we do NOT persist the peer, so a one-time in-BLE-range
-    // device can't gain permanent prompt-free trust, and token rotation (per wireless-enable) revokes
-    // access. Permanent trust is granted ONLY by an explicit 允许 tap (settlePending).
-    if (token !== '' && token === this.bleToken) {
-      return Promise.resolve(true);
-    }
-    if (peerId === '') { return Promise.resolve(false); }         // can't TOFU an anonymous peer
-    if (this.pairing.isTrusted(peerId)) { return Promise.resolve(true); }
-    if (this.sessionDenied.indexOf(peerId) >= 0) { return Promise.resolve(false); }
+  async decide(peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string): Promise<AuthDecision> {
+    if (isLocalhost) { return { verdict: AuthVerdict.Exempt }; }            // hdc/USB → wired exemption
+    if (!this.enabledFlag) { return { verdict: AuthVerdict.Refuse }; }      // wireless off → refuse LAN
+    if (peerId === '') { return { verdict: AuthVerdict.Refuse }; }          // can't authenticate an anonymous peer
+    // Already enrolled (we hold the secret) → steady-state challenge, no prompt. NOTE: trust now lives
+    // in the SecretStore (per-pair secret), not the legacy plaintext-peerId PairingStore allow-list.
+    const existing: Uint8Array | null = await SecretStore.secret(peerId);
+    if (existing !== null) { return { verdict: AuthVerdict.Steady }; }
+    if (this.sessionDenied.indexOf(peerId) >= 0) { return { verdict: AuthVerdict.Refuse }; }
     // REFUSE (do NOT supersede) a second unknown peer while a prompt is in flight: superseding would
     // silently re-target the visible dialog to the newcomer and let it ride the user's tap (a hijack,
     // since deviceName is attacker-controlled). The refused peer is NOT denied — it may retry once the
     // current prompt is answered or its connection is cancelled (cancelPairing on disconnect).
-    if (this.pendingResolve !== null) { return Promise.resolve(false); }
-    return new Promise<boolean>((resolve: (allow: boolean) => void): void => {
+    if (this.pendingResolve !== null) { return { verdict: AuthVerdict.Refuse }; }
+    const approve: Promise<boolean> = new Promise<boolean>((resolve: (allow: boolean) => void): void => {
       this.pendingResolve = resolve;
       this.pendingPeerId = peerId;
       this.pendingDeviceName = deviceName;
@@ -235,7 +241,11 @@ export class WirelessService {
       this.pendingTimer = setTimeout((): void => { this.settlePending(false, false); }, PAIR_TIMEOUT_MS);
       if (this.onPairingRequest !== null) { this.onPairingRequest(peerId, deviceName, promptId); }
     });
+    return { verdict: AuthVerdict.Enroll, approve: approve };
   }
+
+  /** The stored per-pair secret for this Mac (null = not enrolled). Read by the Session in steady/auth. */
+  secretFor(peerId: string): Promise<Uint8Array | null> { return SecretStore.secret(peerId); }
 
   /**
    * The user tapped 允许 (true) or 拒绝 (false). `promptId` is the id the dialog was shown with — a
@@ -266,7 +276,14 @@ export class WirelessService {
     this.bleAdvertiser.stop();
   }
 
-  /** Resolve the in-flight prompt. allow ⇒ trust + remember; deny ⇒ session-deny (no re-prompt). */
+  /**
+   * Resolve the in-flight prompt. On 允许 (allow) we MINT a fresh 32-byte per-pair secret and persist
+   * it (SecretStore, hardware-backed) keyed by this Mac's peerId BEFORE resolving the approve promise —
+   * so by the time the Session reads it back via secretFor() the store write has committed (no race).
+   * The legacy PairingStore allow-list is also updated so the trusted-peer UI still shows the device
+   * (display history); the AUTHORITATIVE trust is the secret. On 拒绝 (deny) → session-deny, no secret.
+   * On cancel/timeout (neither) → just clear the prompt.
+   */
   private settlePending(allow: boolean, deny: boolean): void {
     if (this.pendingTimer >= 0) { clearTimeout(this.pendingTimer); this.pendingTimer = -1; }
     const resolve: ((allow: boolean) => void) | null = this.pendingResolve;
@@ -278,13 +295,35 @@ export class WirelessService {
     this.pendingPeerId = '';
     this.pendingDeviceName = '';
     if (resolve === null) { return; }
-    if (allow && peerId !== '') { this.pairing.trust(peerId, name); }
     if (deny && peerId !== '') { this.sessionDenied.push(peerId); }
     if (this.onPairingDismiss !== null) { this.onPairingDismiss(); }
+    if (allow && peerId !== '') {
+      // Mint + persist the secret, THEN resolve(true). If the store fails, resolve(false) so the
+      // Session fails closed (sends auth_required) rather than enrolling a peer with no stored secret.
+      const secret: Uint8Array = AuthCrypto.newSecret();
+      SecretStore.store(secret, peerId)
+        .then((): void => {
+          this.pairing.trust(peerId, name);   // display-history only; secret is the authoritative trust
+          resolve(true);
+        })
+        .catch((e: Object): void => {
+          hilog.warn(0x0, 'SCDIAG', 'secret store failed on approve %{public}s', JSON.stringify(e));
+          resolve(false);
+        });
+      return;
+    }
     resolve(allow);
   }
 
   // ── Trusted-peer management (UI) ──
   pairedPeers(): TrustedPeer[] { return this.pairing.list(); }
-  forgetPeer(peerId: string): void { this.pairing.forget(peerId); }
+  /** Forget a peer: drop the display-history entry AND the authoritative per-pair secret (so it must
+   *  re-enroll with a fresh 允许 next connect). Without the SecretStore.remove this would leave the
+   *  peer silently auto-trusted (steady) despite the UI showing it gone. */
+  forgetPeer(peerId: string): void {
+    this.pairing.forget(peerId);
+    SecretStore.remove(peerId).then((): void => {}).catch((e: Object): void => {
+      hilog.warn(0x0, 'SCDIAG', 'secret remove failed %{public}s', JSON.stringify(e));
+    });
+  }
 }

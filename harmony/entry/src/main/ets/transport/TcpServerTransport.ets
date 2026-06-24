@@ -9,7 +9,7 @@
  */
 import socket from '@ohos.net.socket';
 import util from '@ohos.util';
-import { Session } from '../session/Session';
+import { Session, AuthGate } from '../session/Session';
 import { Channel, encodeFrame } from '../protocol/FrameCodec';
 
 /**
@@ -34,9 +34,9 @@ export class TcpServerTransport {
   private onStatus: (s: ServerStatus) => void;
   private onVideo: ((payload: Uint8Array, isKeyframe: boolean) => void) | null;
   private onVideoConfig: ((width: number, height: number, codec: string, hdr: string) => void) | null;
-  // Wireless TOFU gate (null ⇒ wired/no gate). Installed onto each Session so an unknown LAN client
-  // must be approved before hello_ack. The wired path passes null → behavior unchanged.
-  private pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string) => Promise<boolean>) | null;
+  // SC-AUTH-v1 trust gate (null ⇒ wired/no gate). Installed onto each Session so a wireless client must
+  // authenticate (challenge-response) before the slot is claimed. The wired path passes null → Exempt.
+  private authGate: AuthGate | null;
   private currentSend: ((bytes: Uint8Array) => void) | null = null;
   private currentClientId: number = -1;
   // Encodes the one-off 'session_busy' rejection frame (single-active-session guard). Reused.
@@ -55,12 +55,12 @@ export class TcpServerTransport {
               onStatus: (s: ServerStatus) => void,
               onVideo: ((payload: Uint8Array, isKeyframe: boolean) => void) | null = null,
               onVideoConfig: ((width: number, height: number, codec: string, hdr: string) => void) | null = null,
-              pairingGate: ((peerId: string, deviceName: string, isLocalhost: boolean, ownerId: number, token: string) => Promise<boolean>) | null = null) {
+              authGate: AuthGate | null = null) {
     this.log = log;
     this.onStatus = onStatus;
     this.onVideo = onVideo;
     this.onVideoConfig = onVideoConfig;
-    this.pairingGate = pairingGate;
+    this.authGate = authGate;
   }
 
   /** Send a pre-framed message to the connected client (e.g. INPUT frames). */
@@ -161,8 +161,11 @@ export class TcpServerTransport {
         this.rejectBusy(client);
         return;
       }
-      this.onStatus(ServerStatus.Connected);
-      this.log('client connected (id=' + client.clientId + ')');
+      // NOTE: do NOT emit ServerStatus.Connected here. The TCP socket is up, but SC-AUTH-v1 (audit H4)
+      // defers the "Connected" / slot-claim to AFTER the wireless `auth` proof verifies (anti-DoS §3) —
+      // fired via session.onAuthenticated below. A wired/loopback client authenticates synchronously in
+      // onHello, so Connected still fires effectively at accept time for the proven wired path.
+      this.log('client connected (id=' + client.clientId + ') — awaiting auth');
 
       const sendFn = (bytes: Uint8Array): void => {
         // Send the exact frame bytes. encodeFrame returns a fresh, offset-0 array.
@@ -176,7 +179,15 @@ export class TcpServerTransport {
       session.onVideo = this.onVideo;
       session.onVideoConfig = this.onVideoConfig;
       session.setOwnerId(client.clientId);   // cancel-owner identity (transport-assigned, not spoofable)
-      if (this.pairingGate !== null) { session.setPairingGate(this.pairingGate); }
+      if (this.authGate !== null) { session.setAuthGate(this.authGate); }
+      // SC-AUTH-v1: the link becomes "Connected" only once auth verifies (wired = synchronous). Guard
+      // against a late fire after this client closed (currentClientId moved on) so a stale auth can't
+      // resurrect the UI's Connected state for a connection that's already gone.
+      session.onAuthenticated = (): void => {
+        if (client.clientId === this.currentClientId) {
+          this.onStatus(ServerStatus.Connected);
+        }
+      };
       // Determine localhost (hdc/USB) vs LAN so the pairing gate exempts wired clients.
       // When bound to 127.0.0.1 EVERY client is local by construction (the wired/USB path) — decide
       // SYNCHRONOUSLY and never depend on getRemoteAddress, so the proven wired handshake can't be
