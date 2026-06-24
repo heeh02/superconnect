@@ -103,11 +103,12 @@ private struct SidebarRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            StatusDot(state: state)
-            Text(name).fontWeight(.medium).lineLimit(1)
+            StatusDot(state: state, size: 11)
+            Text(name).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
             Spacer()
             TransportBadge(kind: device.transport, connected: state.isConnected)
         }
         .padding(.vertical, 4)
+        .help(state.shortLabel)   // hover tooltip = one-word status
     }
 }

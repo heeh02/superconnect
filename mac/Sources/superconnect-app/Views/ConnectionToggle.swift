@@ -17,10 +17,32 @@ struct ConnectionToggle: View {
         }
     }
 
-    private var errorText: String? {
+    /// Each terminal state gets a tailored message + the RIGHT recovery action, instead of one
+    /// undifferentiated orange line: needs-permission → open System Settings, failed → retry,
+    /// blocked → a calm explanation (retrying won't help; free the other link). All actions already
+    /// exist on the VM — this only branches the presentation.
+    @ViewBuilder private var errorSection: some View {
         switch state {
-        case .needsPermission(let e), .failed(let e), .blocked(let e): return e.userMessage
-        default: return nil
+        case .needsPermission(let e):
+            errorRow(e.userMessage, action: ("打开系统设置", { vm.requestPermissions() }))
+        case .failed(let e):
+            errorRow(e.userMessage, action: ("重试", { vm.toggleConnection(for: device) }))
+        case .blocked(let e):
+            errorRow(e.userMessage, action: nil)   // single-active conflict — calm, no retry
+        default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder private func errorRow(_ message: String, action: (title: String, run: () -> Void)?) -> some View {
+        VStack(spacing: 6) {
+            Text(message)
+                .font(.caption).foregroundStyle(.orange)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            if let action {
+                Button(action.title, action: action.run).controlSize(.small)
+            }
         }
     }
 
@@ -51,13 +73,7 @@ struct ConnectionToggle: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if let errorText {
-                Text(errorText)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            errorSection
         }
     }
 }
