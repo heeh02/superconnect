@@ -15,9 +15,12 @@ import { ImeCatcher } from '../ui/ImeCatcher';
 import { InputOverlay } from '../ui/InputOverlay';
 import { RestoreHandle } from '../ui/RestoreHandle';
 import { PairingDialog } from '../ui/PairingDialog';
+import { StatusBanner } from '../ui/StatusBanner';
+import { FirstRunHints } from '../ui/FirstRunHints';
 import { TrustedPeer } from '../services/wireless/PairingStore';
 import { BallGeometry, BallPos } from '../components/BallGeometry';
 import { common } from '@kit.AbilityKit';
+import preferences from '@ohos.data.preferences';
 import hilog from '@ohos.hilog';
 import sc from 'libsuperconnect.so';
 
@@ -35,6 +38,7 @@ struct Index {
   @State ballY: number = 0;
   // GUI state
   @State private showPanel: boolean = false;   // control panel (settings / cheat-sheet / toggles)
+  @State private firstRunHints: boolean = false; // one-time coach bubble on first fullscreen entry
   @State private ballHidden: boolean = false;  // quick toggle: hide the floating ball
   @State private inputDisabled: boolean = false; // pause capture → let the tablet's own UI work
   @State private vWidth: number = 0;           // live stream resolution / codec (from video_config)
@@ -55,6 +59,7 @@ struct Index {
   private manager: ConnectionManager | null = null;   // connection lifecycle (from env)
   private router: InputRouter | null = null;   // owns pen + trackpad + finger input (FSMs)
   private windowCtl: WindowController | null = null;   // window-layout + fullscreen-notification side-effects
+  private uiPrefs: preferences.Preferences | null = null;   // UI-only prefs (first-run hint "seen" flag)
   private readonly port: number = 8888;
 
   private ctx(): common.UIAbilityContext { return getContext(this) as common.UIAbilityContext; }
@@ -68,6 +73,9 @@ struct Index {
     // Start windowed; ask once for notification permission (used by the fullscreen exit action).
     this.windowCtl = new WindowController(this.ctx(), (m: string): void => { this.appendLog(m); });
     this.windowCtl.start();
+    // UI-only prefs (the first-run coach bubble's "seen" flag). View-layer state, not a service.
+    try { this.uiPrefs = preferences.getPreferencesSync(this.ctx(), { name: 'sc_ui' }); }
+    catch (e) { this.appendLog('uiPrefs ' + JSON.stringify(e)); }
     // Composition root selects the role engine (Receiver today); the manager owns the
     // connection lifecycle. The page just binds the view state it shows.
     this.env = new AppEnvironment(this.port, this.ctx());
@@ -147,6 +155,25 @@ struct Index {
     this.displayMode = DisplayMode.Fullscreen;
     this.windowCtl?.enterFullscreen();
     // ImeCatcher grabs focus itself when `active` flips true — no manual refocus needed here.
+    // First fullscreen ever → show the one-time coach bubble (✎/↖ + double-tap). UI pref, not a service.
+    try {
+      if (this.uiPrefs !== null && (this.uiPrefs.getSync('seenFullscreenHints', false) as boolean) === false) {
+        this.firstRunHints = true;
+      }
+    } catch (e) { this.appendLog('hints flag ' + JSON.stringify(e)); }
+  }
+
+  // Dismiss the first-run coach bubble and remember it (so it shows only once).
+  private dismissFirstRunHints(): void {
+    this.firstRunHints = false;
+    if (this.uiPrefs === null) { return; }
+    try {
+      this.uiPrefs.putSync('seenFullscreenHints', true);
+      this.uiPrefs.flush().then((): void => {}).catch((e: Object): void => {
+        hilog.warn(0x0, 'SCDIAG', 'uiPrefs flush failed %{public}s', JSON.stringify(e));
+      });
+    } catch (e) { this.appendLog('hints save ' + JSON.stringify(e)); }
+    this.refocusIme();   // the bubble's button took focus → give it back to the IME catcher (#kbd-focus)
   }
 
   // Re-assert keyboard focus after a focus-stealing modal (control panel / paused banner) closes.
@@ -248,6 +275,16 @@ struct Index {
           onToggleWireless: (v: boolean) => { this.setWireless(v); },
           onOpenPanel: () => { this.openPanel(); },
         })
+
+        // Transitional banner (listening / connecting / reconnecting) anchored to the top, so the
+        // idle→streaming jump isn't silent. Reads existing state only (status + the requesting peer name).
+        Column() {
+          StatusBanner({ status: this.connStatus, peerName: this.pairingName })
+        }
+        .width('100%').height('100%')
+        .padding({ top: 28 })
+        .justifyContent(FlexAlign.Start)
+        .hitTestBehavior(HitTestMode.Transparent)
       }
 
       // Control panel — top-most overlay (openable when idle or in fullscreen).
@@ -280,6 +317,14 @@ struct Index {
           onAllow: () => { this.respondPairing(true); },
           onDeny: () => { this.respondPairing(false); },
         })
+      }
+
+      // First-run coach bubble — one-time overlay on the first fullscreen entry (✎/↖ + double-tap).
+      if (this.firstRunHints && this.fullscreen()) {
+        Column() {
+          Column().width('100%').height('100%').backgroundColor('#90000000')
+        }.width('100%').height('100%').zIndex(45)
+        FirstRunHints({ onDismiss: () => { this.dismissFirstRunHints(); } })
       }
     }
     .width('100%')

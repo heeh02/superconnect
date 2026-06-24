@@ -55,6 +55,9 @@ export struct FloatingBall {
     .position({ x: this.ballX, y: this.ballY })
     .zIndex(10)
     .focusable(false)   // gesture-only; never steal keyboard focus from the hidden IME catcher (#kbd-focus)
+    // a11y: the glyph alone (✎ / ↖) is opaque to screen readers — describe the control + its gestures.
+    .accessibilityText(this.drawing ? '悬浮球 · 绘画模式已开启' : '悬浮球')
+    .accessibilityDescription('轻点切换绘画模式，长按打开控制面板，拖动可移动位置')
     .gesture(
       GestureGroup(GestureMode.Exclusive,
         LongPressGesture({ repeat: false, duration: 450 })
