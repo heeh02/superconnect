@@ -33,7 +33,7 @@ wire format matches the Mac host byte-for-byte.
 - [x] MediaCodec H.264/HEVC decode → `SurfaceView` render (newest-wins, low-latency, keyframe-gated).
 - [x] Input capture: `MotionEvent` (touch + stylus pressure/tilt) → INPUT frames (single-finger v0.2).
 - [x] Wireless path: `0.0.0.0` bind + NSD/mDNS advertise (`_superconnect._tcp`) + TOFU pairing + Wi-Fi IP
-      hint. `WirelessService` + `PairingStore` (mirror HarmonyOS). The Mac's mDNS `WirelessDiscovery`
+      hint. `WirelessService` + `SecretStore` (mirror HarmonyOS). The Mac's mDNS `WirelessDiscovery`
       auto-finds the device; unknown LAN Macs get a 允许/拒绝 prompt (loopback/wired exempt).
 - [x] Wired bring-up over `adb forward` (Mac side: `AdbFportTunnel` / `AndroidWiredDiscovery`).
 

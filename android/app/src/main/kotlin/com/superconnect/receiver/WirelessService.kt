@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
+import com.superconnect.protocol.AuthCrypto
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.concurrent.Executors
@@ -16,9 +17,10 @@ import java.util.concurrent.TimeUnit
  * Owns: the wireless on/off preference; the socket bind address (0.0.0.0 = LAN when on, 127.0.0.1 =
  * wired/adb only when off); the mDNS/NSD advertisement of `_superconnect._tcp` so the Mac's
  * WirelessDiscovery (an NWBrowser for the SAME type that already finds HarmonyOS) auto-discovers this
- * device; the Wi-Fi IPv4 for the manual-connect hint; and the TOFU pairing gate (delegates to
- * PairingStore + an on-screen prompt). Binding 0.0.0.0 serves BOTH the wired adb-forwarded loopback
- * client AND LAN clients; loopback clients are pairing-exempt, LAN clients need approval.
+ * device; the Wi-Fi IPv4 for the manual-connect hint; and the SC-AUTH-v1 trust gate (delegates to
+ * SecretStore + an on-screen 允许/拒绝 prompt). Binding 0.0.0.0 serves BOTH the wired adb-forwarded
+ * loopback client AND LAN clients; loopback clients are pairing-exempt, LAN clients must prove the
+ * shared per-pair secret (challenge-response) before the slot is claimed.
  *
  * Deliberately uses only STANDARD Android APIs (NsdManager / NetworkInterface) so it works across
  * brands; brand-specific quirks (background limits, vendor NSD oddities) are a later adaptation layer.
@@ -30,7 +32,10 @@ class WirelessService(
 ) {
     private val app = context.applicationContext
     private val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private val pairing = PairingStore(app)
+    /** SC-AUTH-v1: trust is now possession of a per-pair SECRET (HMAC-proven on every connect), not a
+     *  bare peerId allow-list. The old PairingStore (spoofable peerId set) is retired — a matching peerId
+     *  (or a BLE discovery token) NO LONGER auto-trusts; the Mac must prove the secret. */
+    private val secrets = SecretStore(app)
     private val nsd = app.getSystemService(Context.NSD_SERVICE) as NsdManager
 
     private var regListener: NsdManager.RegistrationListener? = null
@@ -43,7 +48,9 @@ class WirelessService(
     /** Set by the UI: dismiss the live pairing dialog (fired on tap / timeout / owner-disconnect / teardown). */
     var onPairingDismiss: (() -> Unit)? = null
 
-    fun enabled(): Boolean = prefs.getBoolean(KEY_ENABLED, true)   // default ON: wireless is the point of the receiver
+    // Default OFF (SC-AUTH-v1 / AUTH-SPEC §3): matches the HarmonyOS privacy default — the user opts into
+    // exposing the receiver on the LAN. Wired (adb-forwarded loopback) still works with wireless off.
+    fun enabled(): Boolean = prefs.getBoolean(KEY_ENABLED, false)
     /** Persist the on/off choice (+ reset this-run denials). NOT yet live-applied: no settings toggle calls
      *  this today, and MainActivity reads [bindAddress] once at onCreate — a change takes effect on next
      *  launch. When a toggle UI lands, add a restart hook (stop+rebind transport, re-fire onListening) like
@@ -97,11 +104,12 @@ class WirelessService(
         releaseMulticast()
     }
 
-    // ── TOFU pairing gate (async; mirrors HarmonyOS evaluatePairing / respondPairing / cancelPairing) ──
+    // ── SC-AUTH-v1 trust gate (async; mirrors HarmonyOS evaluatePairing / respondPairing / cancelPairing) ──
     private val lock = Any()
     private val sessionDenied = HashSet<String>()             // peers refused THIS run (no re-prompt until restart)
-    private var pendingResolve: ((Boolean) -> Unit)? = null   // resolver of the one in-flight prompt
+    private var pendingResolve: ((Session.TrustDecision) -> Unit)? = null   // resolver of the one in-flight prompt
     private var pendingPeerId: String = ""
+    private var pendingMacEphPub: ByteArray? = null           // the Mac's hello ephPub (needed to seal pair_secret)
     private var pendingOwnerId: Int = 0                       // transport clientId — only it may cancel its prompt
     private var pendingPromptId: Int = 0                      // monotonic — the user's tap must echo it
     private var promptSeq: Int = 0
@@ -111,23 +119,33 @@ class WirelessService(
     }
 
     /**
-     * ASYNC TOFU gate, called on the transport read thread during `hello`. It DOES NOT block the read
-     * loop — so a client disconnect is noticed immediately and the single-active slot frees at once (the
-     * old blocking design held it for up to 60s, starving even the wired adb client). Loopback (wired) and
-     * trusted peers resolve true synchronously; an unknown LAN peer raises the 允许/拒绝 prompt and resolves
-     * on the user's tap, or false on 60s timeout / owner-disconnect. Mirrors HarmonyOS evaluatePairing.
+     * ASYNC SC-AUTH-v1 gate, called on the transport read thread during `hello`. It DOES NOT block the read
+     * loop — so a client disconnect is noticed immediately and the single-active slot frees at once. Resolves
+     * a [Session.TrustDecision]:
+     *  - loopback (wired/adb) → Exempt (no auth, byte-compatible);
+     *  - a SECRET already stored for this Mac → Steady(secret) (challenge it — no prompt);
+     *  - unknown Mac → raise the 允许/拒绝 prompt; on 允许 MINT + persist a secret keyed by macPeerId and
+     *    resolve Enroll(secret, tabletEphPriv, tabletEphPub); on 拒绝/timeout/owner-disconnect → Reject.
+     *  - anonymous peer / no UI wired up → Reject (fail safe).
+     * A matching peerId NO LONGER auto-trusts (the old isTrusted allow-list is gone); only possession of the
+     * secret (proven by the Mac's later `auth`) authenticates. Mirrors HarmonyOS evaluatePairing.
      */
-    fun evaluate(peerId: String, deviceName: String, isLocalhost: Boolean, ownerId: Int, onResult: (Boolean) -> Unit) {
-        if (isLocalhost) { onResult(true); return }            // wired/adb (loopback) → always trusted
-        if (peerId.isEmpty()) { onResult(false); return }      // can't TOFU an anonymous peer
-        if (pairing.isTrusted(peerId)) { onResult(true); return }
+    fun evaluate(peerId: String, deviceName: String, isLocalhost: Boolean, ownerId: Int,
+                 macEphPub: ByteArray?, onResult: (Session.TrustDecision) -> Unit) {
+        if (isLocalhost) { onResult(Session.TrustDecision.Exempt); return }   // wired/adb (loopback) → exempt
+        if (peerId.isEmpty()) { onResult(Session.TrustDecision.Reject); return }   // can't pair an anonymous peer
+        val existing = secrets.secret(peerId)
+        if (existing != null) { onResult(Session.TrustDecision.Steady(existing)); return }   // steady state — challenge
+        // Enrollment requires the Mac's ephemeral pub (to seal the secret). Without it, refuse.
+        if (macEphPub == null) { onResult(Session.TrustDecision.Reject); return }
         val cb = onPairingRequest
-        if (cb == null) { onResult(false); return }            // no UI wired up ⇒ refuse LAN (fail safe)
+        if (cb == null) { onResult(Session.TrustDecision.Reject); return }    // no UI wired up ⇒ refuse LAN (fail safe)
         var promptId = -1   // stays -1 ⇒ refused under the lock (denied this run, or a prompt already in flight)
         synchronized(lock) {
             if (!sessionDenied.contains(peerId) && pendingResolve == null) {   // else: one prompt at a time (anti-hijack)
                 pendingResolve = onResult
                 pendingPeerId = peerId
+                pendingMacEphPub = macEphPub
                 pendingOwnerId = ownerId
                 pendingPromptId = ++promptSeq
                 promptId = pendingPromptId
@@ -139,7 +157,7 @@ class WirelessService(
                     PAIR_TIMEOUT_SEC, TimeUnit.SECONDS)
             }
         }
-        if (promptId < 0) { onResult(false); return }          // refuse OUTSIDE the lock (no blocking send under lock)
+        if (promptId < 0) { onResult(Session.TrustDecision.Reject); return }  // refuse OUTSIDE the lock (no send under lock)
         cb(peerId, deviceName, promptId)
     }
 
@@ -157,27 +175,42 @@ class WirelessService(
     }
 
     /** Resolve the in-flight prompt iff [matches]. Single source of truth: cancels the timeout and clears
-     *  pending state under [lock], then trusts/denies + dismisses the dialog + resolves OUTSIDE the lock
-     *  (the resolver re-enters Session→transport.send, never back into WirelessService). No-op if nothing
-     *  is pending or [matches] is false (e.g. a stale tap, or a cancel for a different owner). */
+     *  pending state under [lock], then (on 允许) MINTS + persists a per-pair secret and resolves Enroll,
+     *  else resolves Reject — dialog dismiss + resolve happen OUTSIDE the lock (the resolver re-enters
+     *  Session→transport.send, never back into WirelessService). No-op if nothing is pending or [matches]
+     *  is false (e.g. a stale tap, or a cancel for a different owner). */
     private fun settleIf(matches: () -> Boolean, allow: Boolean, deny: Boolean) {
-        var resolve: ((Boolean) -> Unit)? = null
+        var resolve: ((Session.TrustDecision) -> Unit)? = null
         var peerId = ""
+        var macEphPub: ByteArray? = null
         synchronized(lock) {
             if (pendingResolve == null || !matches()) return
             resolve = pendingResolve
             peerId = pendingPeerId
+            macEphPub = pendingMacEphPub
             pendingTimeout?.cancel(false); pendingTimeout = null
-            pendingResolve = null; pendingPeerId = ""; pendingOwnerId = 0; pendingPromptId = 0
+            pendingResolve = null; pendingPeerId = ""; pendingMacEphPub = null; pendingOwnerId = 0; pendingPromptId = 0
             if (deny && peerId.isNotEmpty()) sessionDenied.add(peerId)
         }
-        if (allow && peerId.isNotEmpty()) pairing.trust(peerId)
+        val decision: Session.TrustDecision =
+            if (allow && peerId.isNotEmpty() && macEphPub != null) {
+                // Enrollment: mint a fresh per-pair secret, persist it keyed by the Mac's peerId (so the next
+                // connect is steady state), and hand Session an ephemeral keypair to seal it to this Mac.
+                val secret = AuthCrypto.newSecret()
+                secrets.store(secret, peerId)
+                val (priv, pub) = AuthCrypto.newEphemeralKeyPair()
+                Session.TrustDecision.Enroll(secret, priv, pub)
+            } else {
+                Session.TrustDecision.Reject
+            }
         onPairingDismiss?.invoke()
-        resolve?.invoke(allow)
+        resolve?.invoke(decision)
     }
 
-    fun trustedPeers(): Set<String> = pairing.list()
-    fun forgetPeer(peerId: String) = pairing.forget(peerId)
+    /** Enrolled Macs (those with a stored secret) — drives the control panel's "已配对设备" list. */
+    fun trustedPeers(): Set<String> = secrets.peers()
+    /** User un-pairs a Mac → drop its secret; the next connect re-enrolls (one 允许 tap). */
+    fun forgetPeer(peerId: String) = secrets.remove(peerId)
 
     private fun acquireMulticast() {
         if (multicastLock != null) return

@@ -49,6 +49,11 @@ class SecretStore(context: Context) {
         prefs.edit().remove(peerId).apply()
     }
 
+    /** The set of enrolled Mac peerIds (each maps to a stored secret) — for the "已配对设备" UI list. The
+     *  prefs keys ARE the peerIds (values are the sealed secrets); EncryptedSharedPreferences decrypts keys
+     *  transparently. Returns a defensive copy. */
+    @Synchronized fun peers(): Set<String> = HashSet(prefs.all.keys)
+
     private companion object {
         const val PREFS = "sc_secrets"
     }

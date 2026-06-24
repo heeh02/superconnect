@@ -119,8 +119,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         addFloatingBall()   // tap = 手指当笔, long-press = control panel
         maybeShowFirstRunHint()   // one-time dismissible bubble: explains ✎/↖ + the touchpad gestures
         val session = Session(t, caps, DeviceInfo.deviceName(), DeviceInfo.peerId(this), log = { Log.i(TAG, "[sess] $it") })
-        session.pairingGate = { pid, nm, local, ownerId, onResult -> wl.evaluate(pid, nm, local, ownerId, onResult) }
+        session.trustGate = { pid, nm, local, ownerId, macEphPub, onResult ->
+            wl.evaluate(pid, nm, local, ownerId, macEphPub, onResult) }
         session.onStatus = { s -> runOnUiThread { setStatus(s) } }
+        // SC-AUTH-v1 pre-auth input gate: input/IME/keys reach the peer only once Session authorizes
+        // (post-auth slot-claim, or wired/loopback exempt); revoked on every per-connection reset.
+        session.onAuthorized = { ok -> sender.authorized = ok }
         session.onVideoConfig = { w, h, codec, _ -> onVideoConfig(w, h, codec) }
         session.onVideo = { payload, kf -> onVideo(payload, kf) }
         session.attach()
