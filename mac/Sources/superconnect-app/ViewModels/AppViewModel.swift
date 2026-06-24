@@ -74,6 +74,9 @@ final class AppViewModel: ObservableObject {
 
     // Derived, read-only conveniences.
     var selectedDevice: Device? { devices.first { $0.id == selectedDeviceID } }
+    /// True once BOTH host permissions are granted — the gate the first-run `OnboardingView` watches.
+    /// Pure read of the two already-published booleans; adds no service call (View-layer derived only).
+    var hostReady: Bool { screenRecordingOK && accessibilityOK }
     /// Devices currently connected or connecting.
     var activeConnectionCount: Int { devices.reduce(0) { $0 + ((isConnected($1.id) || isBusy($1.id)) ? 1 : 0) } }
     /// True once the advisory soft cap is reached — the detail view shows a perf caption (non-blocking).

@@ -7,6 +7,8 @@ import SwiftUI
 struct DashboardView: View {
     @ObservedObject var vm: AppViewModel
     @State private var newWirelessIP: String = ""
+    /// User dismissed the first-run sheet for this session (so it doesn't re-pop until relaunch).
+    @State private var onboardingDismissed = false
 
     var body: some View {
         NavigationSplitView {
@@ -21,6 +23,22 @@ struct DashboardView: View {
         }
         .frame(minWidth: 780, minHeight: 480)
         .onAppear { vm.onAppear() }
+        .sheet(isPresented: onboardingSheet) {
+            OnboardingView(vm: vm)
+        }
+    }
+
+    /// First-run gate (View-layer): show the permissions checklist while the host isn't ready AND
+    /// nothing is connected, until the user dismisses it. Reads only `vm.hostReady` + per-device state.
+    private var onboardingSheet: Binding<Bool> {
+        Binding(
+            get: {
+                !onboardingDismissed
+                    && !vm.hostReady
+                    && !vm.devices.contains { vm.isConnected($0.id) || vm.isBusy($0.id) }
+            },
+            set: { presented in if !presented { onboardingDismissed = true } }
+        )
     }
 
     @ViewBuilder private var sidebar: some View {
