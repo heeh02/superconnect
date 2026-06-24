@@ -11,6 +11,19 @@ struct DeviceDetailView: View {
     private var isThisConnected: Bool { vm.isConnected(device.id) }
     private var deviceTelemetry: SessionTelemetry? { vm.telemetry(for: device.id) }
 
+    /// Quality presets over the raw bitrate slider — friendlier than a number. 0=流畅(25) 1=高清(50)
+    /// 2=极致(80) 3=自定义(any other slider value). Writes the existing `vm.bitrateMbps` only (View-layer).
+    private var qualityPreset: Binding<Int> {
+        Binding(
+            get: {
+                switch Int(vm.bitrateMbps) { case 25: return 0; case 50: return 1; case 80: return 2; default: return 3 }
+            },
+            set: { tag in
+                switch tag { case 0: vm.bitrateMbps = 25; case 1: vm.bitrateMbps = 50; case 2: vm.bitrateMbps = 80; default: break }
+            }
+        )
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -21,6 +34,14 @@ struct DeviceDetailView: View {
                 // a live stream immediately, or applies on the next connect.
                 GroupBox("画质") {
                     VStack(alignment: .leading, spacing: 6) {
+                        Picker("画质预设", selection: qualityPreset) {
+                            Text("流畅").tag(0)
+                            Text("高清").tag(1)
+                            Text("极致").tag(2)
+                            Text("自定义").tag(3)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
                         HStack {
                             Text("码率").foregroundStyle(.secondary)
                             Spacer()
