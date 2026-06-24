@@ -39,7 +39,7 @@ class FloatingBall(
     }
 
     var active: Boolean = false
-        set(v) { field = v; invalidate() }
+        set(v) { field = v; invalidate(); syncA11y() }
 
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     private val longPressMs = ViewConfiguration.getLongPressTimeout().toLong()
@@ -52,7 +52,14 @@ class FloatingBall(
         if (!dragging) { longPressFired = true; onLongPress() }
     }
 
-    init { alpha = 0.6f }
+    init { alpha = 0.6f; syncA11y() }
+
+    // TalkBack: the glyph (✎/↖) is decorative, so describe the control + its current mode and gestures
+    // (tap toggles 手指当笔, long-press opens the panel). View-layer a11y only — no behavior change.
+    private fun syncA11y() {
+        contentDescription = if (active) "悬浮球 · 手指当笔已开启，轻点关闭，长按打开控制面板"
+                             else "悬浮球 · 轻点开启手指当笔，长按打开控制面板"
+    }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) =
         setMeasuredDimension(sizePx, sizePx)

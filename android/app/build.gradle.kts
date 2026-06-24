@@ -61,4 +61,7 @@ android {
 
 dependencies {
     implementation(project(":protocol"))
+    // Secure at-rest store for the SC-AUTH-v1 per-pair secret (SecretStore): AES-256-GCM under an
+    // AndroidKeyStore master key. alpha06 is the last 1.1.0 preview that still resolves at minSdk 24.
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 }

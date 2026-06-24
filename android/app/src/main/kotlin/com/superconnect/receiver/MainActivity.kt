@@ -5,6 +5,10 @@ import android.content.Context
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.TextUtils
+import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
@@ -113,6 +117,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         imeCatcher = ime
         root.addView(ime, FrameLayout.LayoutParams(1, 1))
         addFloatingBall()   // tap = 手指当笔, long-press = control panel
+        maybeShowFirstRunHint()   // one-time dismissible bubble: explains ✎/↖ + the touchpad gestures
         val session = Session(t, caps, DeviceInfo.deviceName(), DeviceInfo.peerId(this), log = { Log.i(TAG, "[sess] $it") })
         session.pairingGate = { pid, nm, local, ownerId, onResult -> wl.evaluate(pid, nm, local, ownerId, onResult) }
         session.onStatus = { s -> runOnUiThread { setStatus(s) } }
@@ -165,6 +170,50 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun setFingerAsPen(on: Boolean) { fingerAsPen = on; floatingBall?.active = on }
+
+    /**
+     * One-time gesture hint shown over the idle screen on first launch (confirmed onboarding gap, see
+     * docs/UI-POLISH-DESIGN.md §3.4 Android). A dismissible card explaining the floating ball glyphs
+     * (✎ 手指当笔 / ↖ 长按面板) + the core touchpad gestures. "Seen" is persisted in a plain UI pref —
+     * NOT a service — so it never shows twice. Additive overlay layer; touches nothing input/transport.
+     */
+    private fun maybeShowFirstRunHint() {
+        val prefs = getSharedPreferences("sc_ui", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("first_run_hint_seen", false)) return
+        val card = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xF21C1C1E.toInt()); cornerRadius = px(18).toFloat()
+            }
+            setPadding(px(24), px(22), px(24), px(20))
+            addView(TextView(context).apply {
+                text = "快速上手"; setTextColor(0xFFF2F2F7.toInt()); textSize = 19f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            })
+            addView(TextView(context).apply {
+                text = "• 单指滑动移动指针，轻点单击，双指轻点右键\n" +
+                       "• 双指滑动滚动，双指捏合缩放，按住滑动拖拽\n" +
+                       "• 悬浮球 ↖：轻点切换「手指当笔 ✎」，长按打开控制面板"
+                setTextColor(0xFFC8C8CC.toInt()); textSize = 14f
+                setLineSpacing(0f, 1.35f); setPadding(0, px(12), 0, 0)
+            })
+            addView(android.widget.Button(context).apply {
+                text = "知道了"; isAllCaps = false
+                contentDescription = "关闭快速上手提示"
+            }, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.END; topMargin = px(14) })
+        }
+        val lp = FrameLayout.LayoutParams(px(420), WRAP_CONTENT, Gravity.CENTER)
+        lp.setMargins(px(24), px(24), px(24), px(24))
+        root.addView(card, lp)
+        // the "知道了" button is the card's 3rd child
+        (card.getChildAt(2) as android.widget.Button).setOnClickListener {
+            root.removeView(card)
+            prefs.edit().putBoolean("first_run_hint_seen", true).apply()
+        }
+    }
 
     private fun showControlPanel() {
         if (controlPanel != null) return
@@ -293,7 +342,30 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun setStatus(s: String) {
         lastStatus = s
         statusView.visibility = View.VISIBLE
-        statusView.text = "Superconnect 接收端\n\n$s"
+        // View-layer status clarity: a colored ● leads the line, its hue derived purely from the status
+        // STRING (no service read) — blue=可连接/等待, amber=握手/等待画面, green=投屏中, gray=断开/离线.
+        // The dot is decorative; statusContentDescription carries a spoken phrase for TalkBack.
+        val dot = SpannableString("● ").apply {
+            setSpan(ForegroundColorSpan(statusColor(s)), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        statusView.text = TextUtils.concat("Superconnect 接收端\n\n", dot, s)
+        statusView.contentDescription = "${statusPhrase(s)}。$s"
+    }
+
+    /** Map a status string → semantic color (shared visual language; see docs/UI-POLISH-DESIGN.md §1.1). */
+    private fun statusColor(s: String): Int = when {
+        s.contains("投屏中") -> 0xFF34C759.toInt()                       // connected / streaming — green
+        s.contains("握手") || s.contains("等待画面") -> 0xFFFF9F0A.toInt() // connecting / transitional — amber
+        s.contains("等待 Mac") || s.contains("等待") -> 0xFF0A84FF.toInt() // available / idle — blue
+        else -> 0xFF8E8E93.toInt()                                       // disconnected / offline — gray
+    }
+
+    /** Spoken status phrase for TalkBack — mirrors [statusColor]'s buckets. */
+    private fun statusPhrase(s: String): String = when {
+        s.contains("投屏中") -> "已连接，投屏中"
+        s.contains("握手") || s.contains("等待画面") -> "正在连接"
+        s.contains("等待 Mac") || s.contains("等待") -> "等待 Mac 连接"
+        else -> "已断开"
     }
 
     private fun hideStatus() { statusView.visibility = View.GONE }
