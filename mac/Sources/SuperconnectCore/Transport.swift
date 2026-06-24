@@ -141,7 +141,9 @@ public final class TcpTransport: Transport {
         return "path[status=\(p.status) wifi=\(p.usesInterfaceType(.wifi)) eth=\(p.usesInterfaceType(.wiredEthernet)) other=\(p.usesInterfaceType(.other))]"
     }
 
-    private static func isLoopback(_ host: String) -> Bool {
+    /// Whether `host` is genuine loopback (wired hdc/USB forward). Used as a CLIENT-side fact to decide
+    /// the SC-AUTH-v1 auth exemption — never trust the peer's omission of a challenge (audit H4 fail-open).
+    public static func isLoopback(_ host: String) -> Bool {
         let h = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return h == "localhost" || h == "::1" || h == "::ffff:127.0.0.1" || h.hasPrefix("127.")
     }

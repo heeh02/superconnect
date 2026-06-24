@@ -78,3 +78,19 @@ post-upgrade connect from each takes the enrollment path (one 允许 tap). No si
 - All HMAC compares constant-time. Nonces fresh per connection from a CSPRNG (no nonce DB needed).
 - BLE token (M10): demoted to a non-authenticating discovery hint — it MUST NOT auto-trust anymore.
 - Android wireless default flips ON → OFF (matches HarmonyOS privacy default).
+
+## 4. Known residual risks (accepted for v1; hardening planned)
+
+- **Active on-path MITM during ENROLLMENT.** Enrollment uses unauthenticated P-256 ECDH (TOFU). An
+  attacker who is actively on-path *during the one 允许 tap* can key-substitute both ephemeral pubkeys,
+  learn the minted secret, and become a fully-trusted relay (input + screen). Passive sniffers and ALL
+  post-enrollment (steady-state) attacks are already defeated by the HMAC challenge-response + ECDH
+  confidentiality. **Planned fix (next):** bind the ECDH transcript (hash of both ephPubs as each side
+  saw them) into the auth proof context — a substituted key then fails the HMAC verify (turns a silent
+  MITM into a hard auth_failed); and/or a Short Authentication String (SAS) shown on both ends at the
+  prompt for the user to compare (closes the full relay MITM). Until then this narrow window is ACCEPTED.
+- **Pre-auth socket admission (single-active slot).** The transport slot is taken at TCP accept (before
+  auth), so an unauthenticated peer holding a socket can briefly lock out a real one (session_busy). The
+  AUTH-gated slot (video/UI) is correct; an admission-layer idle/auth deadline is planned hardening.
+- **On-device crypto KAT gate.** Harmony AuthCrypto (cryptoFramework) is device-only — it MUST pass an
+  on-device KAT against auth-vectors.json (+ a live Mac↔tablet enroll+reconnect) before shipping.

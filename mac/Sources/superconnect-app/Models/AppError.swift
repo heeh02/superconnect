@@ -12,6 +12,7 @@ enum AppError: Error, Equatable {
     case pairingRejected
     case wirelessUnreachable
     case alreadyConnectedElsewhere
+    case authFailed
 
     var userMessage: String {
         switch self {
@@ -33,6 +34,8 @@ enum AppError: Error, Equatable {
             return "多次连接超时，无法到达平板。若开启了 VPN/EasyConnect，请尝试关闭后重连，或确认平板 IP 与无线模式已开启"
         case .alreadyConnectedElsewhere:
             return "该平板已被另一连接占用（同一时间仅支持一条连接）。请先断开有线/无线中的另一条，再连接此设备"
+        case .authFailed:
+            return "此平板不再信任本 Mac（或密钥已变更）。请在平板上重新「允许」配对后重试"
         }
     }
 }

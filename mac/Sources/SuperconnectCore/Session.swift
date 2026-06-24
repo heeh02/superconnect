@@ -31,9 +31,27 @@ public final class Session {
         return id
     }()
 
-    /// Optional wireless proximity-pairing token (from BLE bootstrap) to present in `hello`. When set,
-    /// the tablet auto-trusts this Mac (closes the cleartext-peerId replay gap). Set before `start()`.
+    /// Optional wireless proximity-pairing token (from BLE bootstrap). DEMOTED (audit M10): no longer an
+    /// auth credential and no longer sent in `hello` — kept only so existing callers compile. Trust now
+    /// comes from SC-AUTH-v1 (below), not this broadcast value.
     public var pairingToken: String?
+
+    /// SC-AUTH-v1 (audit H4): per-pair secret store for the wireless challenge-response handshake. When
+    /// non-nil AND the peer challenges (sends a `nonce`), the Mac (the TCP client) must prove possession
+    /// of the shared secret before `onConnected` fires. nil ⇒ no auth (the tablet exempts wired/loopback
+    /// by omitting the nonce; tests pass nil). Set before `start()`.
+    public var secretStore: PairSecretStore?
+
+    /// Client-side FACT: did the Mac dial genuine loopback (wired hdc/USB)? Set by HostConnection from
+    /// `TcpTransport.isLoopback(host)`. The auth exemption is honored ONLY when this is true — we never
+    /// trust the peer merely OMITTING a challenge to mean "exempt" (audit H4 client fail-open).
+    public var peerIsLoopback = false
+
+    // Client-side auth handshake state (reset per session/connect).
+    private var macEphPriv: Data?       // our ephemeral P-256 scalar (enrollment ECDH)
+    private var macNonce: Data?         // our challenge to the tablet (mutual auth)
+    private var authSecret: Data?       // the per-pair secret in use once known (looked up or enrolled)
+    private var pendingEnroll: (tabletPeerId: String, tabletEphPub: Data, nonceB64: String)?
 
     public var onLog: ((String) -> Void)?
     public var onConnected: (() -> Void)?        // fired after hello_ack
@@ -81,21 +99,36 @@ public final class Session {
     }
 
     private func sendHello() {
-        var hello: [String: Any] = [
+        // Always offer a fresh ephemeral P-256 public key: the tablet uses it ONLY if it must enroll
+        // this Mac (no stored secret), and ignores it in steady state. Sending it unconditionally avoids
+        // a chicken-and-egg (we don't learn the tablet's peerId until hello_ack, so we can't decide
+        // "enroll or not" before sending hello). Cheap; harmless when unused.
+        let eph = AuthCrypto.newEphemeralKeyPair()
+        macEphPriv = eph.priv
+        let hello: [String: Any] = [
             "type": "hello",
             "role": role,
             "protocolVersion": 2,
+            "authVersion": 1,                 // SC-AUTH-v1: peers without this are refused (fail closed)
             "app": "superconnect",
-            // v2 (all additive — a v1 peer ignores these): identity + role negotiation groundwork.
             "peerId": Session.localPeerId,
             "platform": "macos",
             "deviceName": Host.current().localizedName ?? "Mac",
             "supportedRoles": ["host"],
             "desiredRole": "host",
             "caps": ["codecs": ["h264"], "maxWidth": 3840, "maxHeight": 2160, "hidpi": true],
+            "ephPub": eph.pub.base64EncodedString(),
         ]
-        if let token = pairingToken, !token.isEmpty { hello["pairingToken"] = token }   // BLE proximity proof
         sendControl(hello)
+    }
+
+    /// Prove possession of the per-pair secret: send `auth` with HMAC(secret, contextMac) + our own nonce.
+    private func sendAuth(secret: Data, tabletPeerId: String, nonceB64: String) {
+        let mn = AuthCrypto.randomBytes(32)
+        macNonce = mn
+        let ctx = AuthCrypto.contextMac(macPeerId: Session.localPeerId, tabletPeerId: tabletPeerId, nonceB64: nonceB64)
+        let proof = AuthCrypto.hmac(secret: secret, context: ctx)
+        sendControl(["type": "auth", "proof": proof.base64EncodedString(), "macNonce": mn.base64EncodedString()])
     }
 
     /// Max pings we'll let go unanswered before declaring the link dead. A half-open link (peer gone,
@@ -166,13 +199,82 @@ public final class Session {
             peerCaps = object["caps"] as? [String: Any]
             peerId = object["peerId"] as? String
             peerPlatform = object["platform"] as? String
-            // NOTE: `acceptedRole` is intentionally NOT parsed. Today the responder hardcodes its role
-            // and the initiator assumes host, so a parsed value would be a facade no one may trust.
-            // v1 symmetric roles (#59) reintroduce it via a typed Role↔wire codec. See docs/MODULARITY_AUDIT.md.
             peerDeviceName = object["deviceName"] as? String
             peerProtocolVersion = (object["protocolVersion"] as? Int) ?? 1   // absent ⇒ v1 peer
-            onLog?("received hello_ack (v\(peerProtocolVersion) platform=\(peerPlatform ?? "?"))")
-            onConnected?()
+            let authVersion = object["authVersion"] as? Int
+            let nonceB64 = object["nonce"] as? String
+            onLog?("received hello_ack (v\(peerProtocolVersion) auth=\(authVersion ?? 0) platform=\(peerPlatform ?? "?"))")
+            // SC-AUTH-v1 client decision (audit H4):
+            if let nonceB64, authVersion != nil {
+                // The tablet challenged us → wireless auth REQUIRED before connecting.
+                guard let tabletPeerId = peerId, let store = secretStore else {
+                    onError?("auth_required: no secret store on this connection"); return
+                }
+                if (object["needsPairing"] as? Bool) == true {
+                    // FAIL CLOSED on an unsolicited re-enroll: if we ALREADY hold a secret for this tablet,
+                    // an attacker spoofing its peerId could otherwise force us to overwrite the good secret
+                    // with an attacker-minted one. A genuine re-pair must explicitly remove the old secret.
+                    if store.secret(for: tabletPeerId) != nil {
+                        onError?("auth_failed: unexpected re-enroll for a known tablet — re-pair explicitly"); return
+                    }
+                    // Enrollment: the tablet has no secret for us → it will send `pair_secret` next. Stash
+                    // its ephemeral pubkey + nonce and wait (don't send `auth` until we hold the secret).
+                    guard let tEph = (object["ephPub"] as? String).flatMap({ Data(base64Encoded: $0) }) else {
+                        onError?("auth_failed: enrollment hello_ack missing tablet ephPub"); return
+                    }
+                    pendingEnroll = (tabletPeerId: tabletPeerId, tabletEphPub: tEph, nonceB64: nonceB64)
+                    onLog?("enrollment: awaiting pair_secret")
+                } else {
+                    // Steady state: we must already hold the secret (else the user must re-pair). FAIL CLOSED.
+                    guard let secret = store.secret(for: tabletPeerId) else {
+                        onError?("auth_required: no stored secret for this tablet — re-pair"); return
+                    }
+                    authSecret = secret
+                    sendAuth(secret: secret, tabletPeerId: tabletPeerId, nonceB64: nonceB64)
+                }
+            } else if authVersion == nil {
+                // Un-upgraded peer (no SC-AUTH-v1): refuse rather than fall back to spoofable peerId trust.
+                onError?("auth_required: tablet needs update (no authVersion)")
+            } else if peerIsLoopback {
+                // authVersion present, no nonce, AND we genuinely dialed loopback (wired hdc) → exempt.
+                onLog?("auth-exempt (wired/loopback dial) → connected")
+                onConnected?()
+            } else {
+                // A WIRELESS peer that sent no challenge must NOT be trusted on its word — FAIL CLOSED
+                // (audit H4: the exemption is a client-side fact, not the peer omitting the nonce).
+                onError?("auth_required: wireless peer sent no challenge (refusing unauthenticated connect)")
+            }
+        case "pair_secret":
+            // Enrollment step 2: decrypt the tablet-minted secret under the ECDH key, persist it, then auth.
+            guard let pe = pendingEnroll, let store = secretStore, let macEphPriv,
+                  let enc = (object["encSecret"] as? String).flatMap({ Data(base64Encoded: $0) }),
+                  let salt = (object["salt"] as? String).flatMap({ Data(base64Encoded: $0) }),
+                  let aeadNonce = (object["aeadNonce"] as? String).flatMap({ Data(base64Encoded: $0) })
+            else { onError?("auth_failed: malformed pair_secret"); return }
+            do {
+                let key = try AuthCrypto.deriveEcdhKey(myPrivRaw: macEphPriv, peerPubRaw: pe.tabletEphPub, salt: salt)
+                let secret = try AuthCrypto.open(encSecret: enc, key: key, nonce: aeadNonce, aad: AuthCrypto.pairInfo)
+                store.store(secret, for: pe.tabletPeerId)
+                authSecret = secret
+                pendingEnroll = nil
+                sendAuth(secret: secret, tabletPeerId: pe.tabletPeerId, nonceB64: pe.nonceB64)
+                onLog?("enrollment: secret installed → sent auth")
+            } catch {
+                onError?("auth_failed: enrollment decrypt failed (\(error))")
+            }
+        case "auth_ack":
+            // Mutual auth: the tablet proves it ALSO holds the secret. Only now is the link trusted.
+            guard let secret = authSecret, let tabletPeerId = peerId, let mn = macNonce,
+                  let proof = (object["proof"] as? String).flatMap({ Data(base64Encoded: $0) })
+            else { onError?("auth_failed: malformed auth_ack"); return }
+            let ctx = AuthCrypto.contextPad(macPeerId: Session.localPeerId, tabletPeerId: tabletPeerId,
+                                            macNonceB64: mn.base64EncodedString())
+            if AuthCrypto.verify(proof: proof, secret: secret, context: ctx) {
+                onLog?("auth ok (mutual) → connected")
+                onConnected?()
+            } else {
+                onError?("auth_failed: tablet proof mismatch")
+            }
         case "caps_update":
             // Tablet rotated / changed resolution → updated panel caps. Re-negotiate the display.
             peerCaps = object["caps"] as? [String: Any]
@@ -192,7 +294,10 @@ public final class Session {
                 onRTT?(rttMs)
             }
         case "error":
-            onError?("peer error: \(object["message"] as? String ?? "unknown")")
+            // SC-AUTH-v1 surfaces a machine-readable `reason` (auth_failed / pairing_rejected / …); fall
+            // back to `message`. HostConnection treats auth_failed/required as fatal (no retry storm).
+            let reason = (object["reason"] as? String) ?? (object["message"] as? String) ?? "unknown"
+            onError?("peer error: \(reason)")
         case "bye":
             onClosed?()
         case "text":

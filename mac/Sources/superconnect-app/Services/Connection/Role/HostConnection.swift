@@ -179,6 +179,8 @@ final class HostConnection: ConnectionEngine {
         let transport = TcpTransport(host: host, port: port, avoidVirtualInterfaces: self.avoidVirtualInterfaces)
         let session = Session(transport: transport, role: "mac")
         session.pairingToken = self.pairingToken   // BLE proximity token (nil for wired/mDNS/manual)
+        session.secretStore = KeychainPairSecretStore()   // SC-AUTH-v1: per-pair secret for wireless challenge-response (wired tablet exempts → unused)
+        session.peerIsLoopback = TcpTransport.isLoopback(self.host)   // auth exemption is a CLIENT fact (wired hdc), not the peer's word (H4)
         self.transport = transport
         self.session = session
 
@@ -233,6 +235,17 @@ final class HostConnection: ConnectionEngine {
                     self.running = false
                     self.teardownSession()
                     self.stateSubject.send(.blocked(.alreadyConnectedElsewhere))
+                    return
+                }
+                // SC-AUTH-v1 (H4): the tablet refused our proof (or we hold no/stale secret, or the tablet
+                // needs updating). FATAL like a rejection — retrying can't fix a trust mismatch; the user
+                // must re-pair. Surfaced as .authFailed so the UI says "re-pair on the tablet".
+                if msg.contains("auth_failed") || msg.contains("auth_required") {
+                    self.diag("wireless auth failed/required — fatal (re-pair needed)")
+                    self.generation += 1
+                    self.running = false
+                    self.teardownSession()
+                    self.stateSubject.send(.failed(.authFailed))
                     return
                 }
                 // Repeated connect-timeouts mean the route never reaches the tablet — classically a

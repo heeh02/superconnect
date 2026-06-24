@@ -6,8 +6,8 @@ import CryptoKit
 /// cross-language golden vectors in `proto/auth-vectors.json` (every platform must reproduce them).
 ///
 /// Trust model: a 32-byte per-pair `secret` is established at pairing (never sent in clear — delivered
-/// X25519-ECDH-encrypted). Every later connect proves possession via HMAC-SHA256 over a fresh nonce,
-/// so a sniffed/replayed handshake can't impersonate a paired peer. See docs/SECURITY-H4-DESIGN.md.
+/// P-256-ECDH-encrypted). Every later connect proves possession via HMAC-SHA256 over a fresh nonce,
+/// so a sniffed/replayed handshake can't impersonate a paired peer. See proto/AUTH-SPEC.md.
 public enum AuthCrypto {
     public static let authLabel = "SC-AUTH-v1"
     public static let pairInfo = Data("SC-PAIR-v1".utf8)   // HKDF info + AES-GCM AAD
