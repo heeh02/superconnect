@@ -74,17 +74,6 @@ final class AppViewModel: ObservableObject {
 
     // Derived, read-only conveniences.
     var selectedDevice: Device? { devices.first { $0.id == selectedDeviceID } }
-
-    /// The sidebar list. Once a device is connected/connecting, hide OTHER idle cards that share its
-    /// display name — the same physical tablet often appears 2-3× pre-connection (BLE + mDNS at two LAN
-    /// IPs, plus a separate wired card; mDNS/BLE don't advertise a stable peerId, so they can't be merged
-    /// by endpoint). After you connect one, the duplicates are just noise, so collapse to the live card.
-    /// (Active cards always stay; a genuinely different unconnected device with a distinct name stays.)
-    var visibleDevices: [Device] {
-        let activeNames = Set(devices.filter { isConnected($0.id) || isBusy($0.id) }.map { displayName(for: $0) })
-        guard !activeNames.isEmpty else { return devices }
-        return devices.filter { isConnected($0.id) || isBusy($0.id) || !activeNames.contains(displayName(for: $0)) }
-    }
     /// True once BOTH host permissions are granted — the gate the first-run `OnboardingView` watches.
     /// Pure read of the two already-published booleans; adds no service call (View-layer derived only).
     var hostReady: Bool { screenRecordingOK && accessibilityOK }

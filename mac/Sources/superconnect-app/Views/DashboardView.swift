@@ -51,11 +51,11 @@ struct DashboardView: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
             Divider()
-            if vm.visibleDevices.isEmpty {
+            if vm.devices.isEmpty {
                 EmptyStateView()
                 Spacer(minLength: 0)
             } else {
-                List(vm.visibleDevices, selection: Binding(
+                List(vm.devices, selection: Binding(
                     get: { vm.selectedDeviceID },
                     set: { if let id = $0 { vm.select(id) } }   // select only changes the detail pane (no connection side effect, #51)
                 )) { device in
