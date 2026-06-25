@@ -115,18 +115,17 @@ export class AuthCrypto {
     const symKey: cryptoFramework.SymKey =
       await cryptoFramework.createSymKeyGenerator('AES256').convertKey({ data: key32 });
     const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher('AES256|GCM|NoPadding');
-    // The 16-byte authTag is written into this blob by doFinal; it is appended to the ciphertext.
-    const tagHolder: cryptoFramework.DataBlob = { data: new Uint8Array(16) };
     const spec: cryptoFramework.GcmParamsSpec = {
       algName: 'GcmParamsSpec',
       iv: { data: nonce12 },
       aad: { data: aad },
-      authTag: tagHolder,
+      authTag: { data: new Uint8Array(16) },   // placeholder required by the spec; unused on encrypt
     };
     await cipher.init(cryptoFramework.CryptoMode.ENCRYPT_MODE, symKey, spec);
+    // On HarmonyOS cryptoFramework, GCM encrypt doFinal RETURNS the ciphertext ‖ 16-byte tag already
+    // (verified on-device against the golden vector — do NOT append spec.authTag, that double-counts it).
     const ct: cryptoFramework.DataBlob = await cipher.doFinal({ data: plaintext });
-    // cryptoFramework writes the tag back into spec.authTag.data on encrypt; output = ct ‖ tag.
-    return AuthCrypto.concat(ct.data, spec.authTag.data);
+    return ct.data;
   }
 
   /** Decrypt ciphertext‖tag (16B) → plaintext (throws on a bad tag). */
@@ -240,4 +239,5 @@ export class AuthCrypto {
     for (let i: number = 0; i < a.length; i++) { diff |= a[i] ^ b[i]; }
     return diff === 0;
   }
+
 }
