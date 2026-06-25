@@ -88,7 +88,9 @@ final class BleDiscovery: NSObject, DeviceDiscovery {
 
     private func publish() { subject.send(Array(found.values).sorted { $0.name < $1.name }) }
 
-    /// Parse our manufacturer data `[id-LE(2)][ipv4(4)][port-BE(2)][token(8)]` → a `.wireless` Device.
+    /// Parse our manufacturer data `[id-LE(2)][ipv4(4)][port-BE(2)][token(8)][peerKey(8)?]` → a
+    /// `.wireless` Device. The trailing 8-byte peerKey is the cross-source dedup id (first 8 bytes of the
+    /// tablet's peerId UUID); absent on an older tablet (14-byte payload) → `peerKey` nil, host:port dedup.
     private static func device(from mfr: Data, name: String?, peripheralId: UUID) -> Device? {
         let b = [UInt8](mfr)
         guard b.count >= 2 + 14 else { return nil }
@@ -99,10 +101,11 @@ final class BleDiscovery: NSObject, DeviceDiscovery {
         let port = (UInt16(p[4]) << 8) | UInt16(p[5])
         guard port != 0, p[0] != 0 else { return nil }
         let token = p[6..<14].map { String(format: "%02x", $0) }.joined()
+        let peerKey: String? = (p.count >= 22) ? p[14..<22].map { String(format: "%02x", $0) }.joined() : nil
         let display = (name?.isEmpty == false) ? name! : ip
         return Device(id: "ble:\(peripheralId.uuidString)", name: display, transport: .wireless,
                       capabilities: .canReceive, endpoint: .tcp(host: ip, port: port),
-                      pairingToken: token.isEmpty ? nil : token)
+                      pairingToken: token.isEmpty ? nil : token, peerKey: peerKey)
     }
 
     /// Append a diagnostic line to /tmp/sc-mac-diag.log (shared with HostConnection). Self-bounding.

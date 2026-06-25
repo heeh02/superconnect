@@ -20,4 +20,9 @@ struct Device: Identifiable, Hashable {
     /// the Mac presents it in the Wi-Fi `hello` and the tablet auto-trusts this Mac (closes the
     /// cleartext-peerId replay gap). Orthogonal to `endpoint`, like `capabilities`.
     var pairingToken: String? = nil
+    /// Stable cross-source identity for PRE-connection dedup: the first 8 bytes of the tablet's persistent
+    /// peerId UUID, as 16 lowercase hex chars (nil if the advert didn't carry it — old tablet / manual IP).
+    /// The tablet publishes it in the mDNS TXT `pid` AND the BLE payload, so the SAME tablet seen at two
+    /// LAN IPs (dual Wi-Fi) or over both BLE+mDNS collapses to one card. See DeviceStore.collapseWireless.
+    var peerKey: String? = nil
 }

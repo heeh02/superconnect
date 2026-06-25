@@ -21,7 +21,7 @@ import { common } from '@kit.AbilityKit';
 import { PairingStore, TrustedPeer } from './PairingStore';
 import { MdnsAdvertiser } from './MdnsAdvertiser';
 import { BleAdvertiser } from './BleAdvertiser';
-import { deviceDisplayName } from '../DeviceIdentity';
+import { deviceDisplayName, stablePeerId } from '../DeviceIdentity';
 import { AuthCrypto } from './AuthCrypto';
 import { SecretStore } from './SecretStore';
 import { AuthGate, AuthDecision, AuthVerdict } from '../../session/Session';
@@ -112,7 +112,7 @@ export class WirelessService implements AuthGate {
     this.listenPort = port;
     if (this.onPortChange !== null) { this.onPortChange(port); }
     if (this.enabledFlag && address !== '127.0.0.1') {
-      this.advertiser.advertise(deviceDisplayName(), port);
+      this.advertiser.advertise(deviceDisplayName(), port, stablePeerId());
       this.startBle();
     } else {
       this.advertiser.unadvertise();
@@ -141,10 +141,13 @@ export class WirelessService implements AuthGate {
     }
   }
 
-  /** The 14-byte BLE advertisement payload: ipv4(4) + port(2, big-endian) + token(8). The Mac reads
-   *  this straight from the scan (no GATT connect). Token is 16 hex chars → 8 bytes. */
+  /** The 22-byte BLE advertisement payload: ipv4(4) + port(2, big-endian) + token(8) + peerKey(8). The
+   *  Mac reads this straight from the scan (no GATT connect). Token is 16 hex chars → 8 bytes. peerKey is
+   *  the first 8 bytes of the stable peerId UUID — the SAME identity the mDNS TXT `pid` carries, so the
+   *  Mac can collapse this BLE card and the mDNS card (different LAN IP / different name) into one tablet.
+   *  Total 22B + 2B mfr-id header = 24B → fits the 31B BLE advert (flags 3 + 1+1+2+22 = 29). */
   private blePayload(): Uint8Array {
-    const buf: Uint8Array = new Uint8Array(14);
+    const buf: Uint8Array = new Uint8Array(22);
     const parts: string[] = this.wifiIpv4().split('.');
     for (let i = 0; i < 4; i++) {
       buf[i] = parts.length === 4 ? (parseInt(parts[i], 10) & 0xff) : 0;
@@ -153,6 +156,10 @@ export class WirelessService implements AuthGate {
     buf[5] = this.listenPort & 0xff;
     for (let i = 0; i < 8; i++) {              // token: 16 hex chars → 8 bytes
       buf[6 + i] = parseInt(this.bleToken.substring(i * 2, i * 2 + 2), 16) & 0xff;
+    }
+    const pidHex: string = stablePeerId().split('-').join('');   // 32 hex chars; first 16 = first 8 bytes
+    for (let i = 0; i < 8; i++) {
+      buf[14 + i] = parseInt(pidHex.substring(i * 2, i * 2 + 2), 16) & 0xff;
     }
     return buf;
   }

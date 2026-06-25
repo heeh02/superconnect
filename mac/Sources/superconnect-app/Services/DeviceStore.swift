@@ -17,10 +17,11 @@ final class DeviceStore: ObservableObject {
     /// manual-IP and mDNS wireless sources are both `.wireless` — so keying on kind would let one
     /// clobber the other's list. Each source owns its own slot; merge unions all slots.
     private var bySource: [ObjectIdentifier: [Device]] = [:]
-    /// Sticky representative `id` per wireless `host:port`, so the collapsed card keeps a STABLE
-    /// identity when a flaky BLE/mDNS sibling comes and goes (a flip would orphan the connection
-    /// state keyed by the old id). Re-chosen only when the held representative itself disappears.
-    private var repIdByEndpoint: [String: String] = [:]
+    /// Sticky representative `id` per dedup GROUP (keyed by the group's stable `peerKey` when known, else
+    /// its `host:port`), so the collapsed card keeps a STABLE identity when a flaky BLE/mDNS sibling or a
+    /// second LAN IP comes and goes (a flip would orphan the connection state keyed by the old id).
+    /// Re-chosen only when the held representative itself disappears.
+    private var repIdByGroup: [String: String] = [:]
     private var bag = Set<AnyCancellable>()
     private var started = false
 
@@ -55,32 +56,85 @@ final class DeviceStore: ObservableObject {
             }
         }
         devices = collapseWireless(Array(byId.values)).sorted { $0.name < $1.name }
+        Self.diag("cards=\(devices.count) " + devices.map { "[\($0.transport.rawValue) \($0.name) pk=\($0.peerKey ?? "—")]" }.joined(separator: " "))
     }
 
-    /// Collapse wireless (`.tcp`) devices sharing the same `host:port` into one card; pass wired and
-    /// anything else through untouched. The representative carries the BLE proximity token (so the
-    /// merged card still auto-trusts) and the most human name, and its `id` is held stable per
-    /// endpoint via `repIdByEndpoint`.
+    /// Append a one-line device-list summary to /tmp/sc-mac-diag.log (shared with HostConnection/BLE) so
+    /// the collapse result (and each card's dedup `peerKey`) is observable. Self-bounding.
+    private static func diag(_ s: String) {
+        let path = "/tmp/sc-mac-diag.log"
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           let size = attrs[.size] as? Int, size > 256 * 1024 { try? FileManager.default.removeItem(atPath: path) }
+        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+        if let h = FileHandle(forWritingAtPath: path) {
+            h.seekToEndOfFile()
+            if let d = ("STORE: " + s + "\n").data(using: .utf8) { h.write(d) }
+            try? h.close()
+        }
+    }
+
+    /// Collapse wireless (`.tcp`) devices for the SAME tablet into one card; pass wired and anything else
+    /// through untouched. Two wireless cards merge when they share a stable `peerKey` (the same tablet at
+    /// two LAN IPs / over BLE vs mDNS) OR the same `host:port` (sources that don't advertise a peerKey,
+    /// e.g. a manual IP next to a peerKey-bearing mDNS card). The representative carries the BLE proximity
+    /// token + peerKey and the most human name; its `id` is held stable per group via `repIdByGroup`.
     private func collapseWireless(_ all: [Device]) -> [Device] {
-        var groups: [String: [Device]] = [:]
+        var wireless: [Device] = []
         var passthrough: [Device] = []
         for d in all {
-            guard case let .tcp(host, port) = d.endpoint else { passthrough.append(d); continue }
-            groups[Self.endpointKey(host: host, port: port), default: []].append(d)
+            if case .tcp = d.endpoint { wireless.append(d) } else { passthrough.append(d) }
         }
-        repIdByEndpoint = repIdByEndpoint.filter { groups.keys.contains($0.key) }   // forget vanished endpoints
+        let groups = Self.groupWireless(wireless)
+        let liveKeys = Set(groups.map { Self.groupKey(of: $0) })
+        repIdByGroup = repIdByGroup.filter { liveKeys.contains($0.key) }   // forget vanished groups
         var result = passthrough
-        for (key, group) in groups { result.append(representative(of: group, endpointKey: key)) }
+        for group in groups { result.append(representative(of: group)) }
         return result
+    }
+
+    /// Group wireless cards via union-find over two signals: a shared `peerKey` OR a shared `host:port`.
+    /// peerKey is the cross-IP/cross-source tablet identity; host:port links peerKey-less sources. A card
+    /// can bridge two host:port groups via a common peerKey (the dual-Wi-Fi case this whole change fixes).
+    private static func groupWireless(_ devs: [Device]) -> [[Device]] {
+        guard !devs.isEmpty else { return [] }
+        var parent = Array(0..<devs.count)
+        func find(_ x: Int) -> Int { var r = x; while parent[r] != r { parent[r] = parent[parent[r]]; r = parent[r] }; return r }
+        func union(_ a: Int, _ b: Int) { parent[find(a)] = find(b) }
+        var firstByPeer: [String: Int] = [:]
+        var firstByEndpoint: [String: Int] = [:]
+        for (i, d) in devs.enumerated() {
+            if let pk = d.peerKey {
+                if let j = firstByPeer[pk] { union(i, j) } else { firstByPeer[pk] = i }
+            }
+            if case let .tcp(host, port) = d.endpoint {
+                let ek = endpointKey(host: host, port: port)
+                if let j = firstByEndpoint[ek] { union(i, j) } else { firstByEndpoint[ek] = i }
+            }
+        }
+        var byRoot: [Int: [Device]] = [:]
+        for (i, d) in devs.enumerated() { byRoot[find(i), default: []].append(d) }
+        return Array(byRoot.values)
+    }
+
+    /// A stable key identifying a dedup group across refreshes: the shared peerKey if any (min for
+    /// determinism), else the min `host:port` in the group. Used to pin the sticky representative id.
+    private static func groupKey(of group: [Device]) -> String {
+        if let pk = group.compactMap({ $0.peerKey }).min() { return "peer:" + pk }
+        let eps: [String] = group.compactMap { d in
+            if case let .tcp(host, port) = d.endpoint { return endpointKey(host: host, port: port) }
+            return nil
+        }
+        return "ep:" + (eps.min() ?? (group.first?.id ?? ""))
     }
 
     /// Pick one card for a wireless `host:port` group. ID comes from the most STABLE source
     /// (manual is user-entered, removable, and doesn't flap → mdns → ble), pinned via the sticky
     /// map so a sibling flap can't flip it. NAME comes from the most HUMAN source (mdns/ble report
     /// the device's real name; a manual entry may be a raw IP). Token + capabilities union the group.
-    private func representative(of group: [Device], endpointKey key: String) -> Device {
+    private func representative(of group: [Device]) -> Device {
+        let key = Self.groupKey(of: group)
         guard group.count > 1 else {
-            if let only = group.first { repIdByEndpoint[key] = only.id }
+            if let only = group.first { repIdByGroup[key] = only.id }
             return group.first!
         }
         func rank(_ id: String, _ order: [String]) -> Int {
@@ -89,16 +143,17 @@ final class DeviceStore: ObservableObject {
         }
         // Hold the previously-chosen representative if it's still present; else pick by id-stability.
         let chosen: Device
-        if let held = repIdByEndpoint[key], let stillThere = group.first(where: { $0.id == held }) {
+        if let held = repIdByGroup[key], let stillThere = group.first(where: { $0.id == held }) {
             chosen = stillThere
         } else {
             chosen = group.min { rank($0.id, ["manual:", "mdns:", "ble:"]) < rank($1.id, ["manual:", "mdns:", "ble:"]) }!
-            repIdByEndpoint[key] = chosen.id
+            repIdByGroup[key] = chosen.id
         }
         var rep = chosen
         if let nicest = group.min(by: { rank($0.id, ["mdns:", "ble:", "manual:"]) < rank($1.id, ["mdns:", "ble:", "manual:"]) }),
            !nicest.name.isEmpty { rep.name = nicest.name }
         rep.pairingToken = rep.pairingToken ?? group.compactMap { $0.pairingToken }.first
+        rep.peerKey = rep.peerKey ?? group.compactMap { $0.peerKey }.first
         for d in group { rep.capabilities.formUnion(d.capabilities) }
         return rep
     }

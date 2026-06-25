@@ -16,13 +16,19 @@ export class MdnsAdvertiser {
 
   constructor(ctx: common.UIAbilityContext) { this.ctx = ctx; }
 
-  /** Publish the service (removing any prior one first, so re-advertise is clean). */
-  advertise(serviceName: string, port: number): void {
+  /** Publish the service (removing any prior one first, so re-advertise is clean). `peerId` is published
+   *  as a TXT attribute `pid` so the Mac can collapse the SAME tablet seen at two LAN IPs / over BLE vs
+   *  mDNS into one card (the BLE advert carries the same identity's first 8 bytes). UUID is ASCII, so
+   *  charCodeAt gives the UTF-8 bytes directly. */
+  advertise(serviceName: string, port: number, peerId: string): void {
     this.unadvertise();
+    const pidBytes: number[] = [];
+    for (let i = 0; i < peerId.length; i++) { pidBytes.push(peerId.charCodeAt(i) & 0xff); }
     const info: mdns.LocalServiceInfo = {
       serviceType: SERVICE_TYPE,
       serviceName: serviceName,
       port: port,
+      serviceAttribute: [{ key: 'pid', value: pidBytes }],
     };
     this.advertised = info;
     mdns.addLocalService(this.ctx, info).then((): void => {
