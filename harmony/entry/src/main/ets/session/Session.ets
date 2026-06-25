@@ -484,9 +484,13 @@ export class Session {
       supportedRoles: ['receiver'],
       acceptedRole: 'receiver',
       caps: caps,
+      // Always advertise SC-AUTH-v1 capability — even on the EXEMPT (wired/loopback) path that carries no
+      // nonce. Absence of authVersion means "genuinely pre-H4 tablet", NOT "H4 tablet that exempted you";
+      // conflating the two made the Mac reject the exempt hello_ack as "needs update". The nonce's
+      // presence (below) is what signals a challenge; authVersion just states we speak the protocol.
+      authVersion: 1,
     };
     if (nonceB64 !== null) {
-      ack.authVersion = 1;
       ack.nonce = nonceB64;
       ack.needsPairing = needsPairing;
       if (tabletEphPub !== null) { ack.ephPub = AuthCrypto.toBase64(tabletEphPub); }

@@ -232,13 +232,18 @@ public final class Session {
                     authSecret = secret
                     sendAuth(secret: secret, tabletPeerId: tabletPeerId, nonceB64: nonceB64)
                 }
-            } else if authVersion == nil {
-                // Un-upgraded peer (no SC-AUTH-v1): refuse rather than fall back to spoofable peerId trust.
-                onError?("auth_required: tablet needs update (no authVersion)")
             } else if peerIsLoopback {
-                // authVersion present, no nonce, AND we genuinely dialed loopback (wired hdc) → exempt.
+                // We genuinely dialed loopback (wired hdc / USB) → physically trusted, so EXEMPT regardless
+                // of what the tablet advertised. An H4 tablet omits authVersion when it exempts a loopback
+                // client; a pre-H4 tablet omits it always. Either way the USB path is the trust anchor.
+                // Checked BEFORE the missing-authVersion refusal so the wired exemption can't be starved.
+                // (audit H4: the exemption is a CLIENT-side fact — `peerIsLoopback` is where WE dialed,
+                // unspoofable by the peer; a LAN attacker can't make this true.)
                 onLog?("auth-exempt (wired/loopback dial) → connected")
                 onConnected?()
+            } else if authVersion == nil {
+                // Un-upgraded WIRELESS peer (no SC-AUTH-v1): refuse rather than fall back to spoofable peerId trust.
+                onError?("auth_required: tablet needs update (no authVersion)")
             } else {
                 // A WIRELESS peer that sent no challenge must NOT be trusted on its word — FAIL CLOSED
                 // (audit H4: the exemption is a client-side fact, not the peer omitting the nonce).

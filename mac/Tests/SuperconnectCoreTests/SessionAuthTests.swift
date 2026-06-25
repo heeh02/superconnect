@@ -49,6 +49,23 @@ final class SessionAuthTests: XCTestCase {
         XCTAssertTrue(connected, "wired/loopback dial is exempt and connects")
     }
 
+    /// Loopback exemption holds even for a PRE-H4 tablet (hello_ack omits authVersion entirely): a wired
+    /// USB dial is the physical trust anchor, so the Mac must connect regardless of what the tablet
+    /// advertises. Regression for the live bug where a wired connect failed "tablet needs update" because
+    /// the missing-authVersion refusal was checked before the loopback exemption.
+    func testLoopbackConnectsEvenWithoutAuthVersion() {
+        let t = MockTransport()
+        let s = Session(transport: t, role: "mac")
+        s.secretStore = InMemoryPairSecretStore()
+        s.peerIsLoopback = true   // wired hdc
+        var connected = false
+        s.onConnected = { connected = true }
+        s.onError = { _ in }
+        s.start()
+        t.feed(["type": "hello_ack", "peerId": "tablet-1"])   // NO authVersion, NO nonce (pre-H4 / exempt)
+        XCTAssertTrue(connected, "a loopback (USB) dial connects even when the tablet omits authVersion")
+    }
+
     /// Un-upgraded peer (no authVersion) is refused even on a wireless dial — never peerId-trust fallback.
     func testMissingAuthVersionFailsClosed() {
         let t = MockTransport()
