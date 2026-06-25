@@ -320,11 +320,16 @@ struct Index {
       }
 
       // First-run coach bubble — one-time overlay on the first fullscreen entry (✎/↖ + double-tap).
+      // MUST sit ABOVE the InputOverlay (HitTestMode.Block) or its touches get swallowed; the backdrop +
+      // card live in ONE high-zIndex Stack (card on top) and BOTH dismiss, so it can never trap the user.
       if (this.firstRunHints && this.fullscreen()) {
-        Column() {
-          Column().width('100%').height('100%').backgroundColor('#90000000')
-        }.width('100%').height('100%').zIndex(45)
-        FirstRunHints({ onDismiss: () => { this.dismissFirstRunHints(); } })
+        Stack({ alignContent: Alignment.Center }) {
+          Column()
+            .width('100%').height('100%').backgroundColor('#90000000')
+            .onClick(() => { this.dismissFirstRunHints(); })   // tap anywhere outside the card to dismiss
+          FirstRunHints({ onDismiss: () => { this.dismissFirstRunHints(); } })
+        }
+        .width('100%').height('100%').zIndex(100)   // above input capture / floating ball / panel
       }
     }
     .width('100%')
