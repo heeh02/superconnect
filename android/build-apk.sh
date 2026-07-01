@@ -45,7 +45,7 @@ if [ -d "$HERE/app/src/main/res" ]; then
 fi
 "$BT/aapt2" link -o "$OUT/base.apk" -I "$AJAR" --manifest "$OUT/AndroidManifest.xml" \
   "${RES_FLAGS[@]}" \
-  --min-sdk-version 24 --target-sdk-version 36 --version-code 1 --version-name 0.1
+  --min-sdk-version 24 --target-sdk-version 36 --version-code 2 --version-name 0.2.0
 
 echo "4/6 add classes.dex"
 cp "$OUT/base.apk" "$OUT/unsigned.apk"
