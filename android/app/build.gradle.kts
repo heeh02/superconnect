@@ -61,7 +61,8 @@ android {
 
 dependencies {
     implementation(project(":protocol"))
-    // Secure at-rest store for the SC-AUTH-v1 per-pair secret (SecretStore): AES-256-GCM under an
-    // AndroidKeyStore master key. alpha06 is the last 1.1.0 preview that still resolves at minSdk 24.
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // NO external deps: SecretStore now seals the SC-AUTH-v1 per-pair secret with AES-256-GCM under an
+    // AndroidKeyStore key using ONLY the framework (java.security / javax.crypto). Dropped
+    // androidx.security-crypto (deprecated alpha that broke the no-deps build-apk.sh AND threw at runtime,
+    // crashing the wireless handshake). Keeps the manual kotlinc→d8 build path (android/build-apk.sh) working.
 }

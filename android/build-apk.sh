@@ -32,10 +32,19 @@ echo "2/6 d8 → classes.dex (+ kotlin-stdlib)"
 CLS=$(find "$OUT/classes" -name '*.class')
 "$BT/d8" --min-api 24 --lib "$AJAR" --output "$OUT/dex" ${=CLS} "$KSTDLIB"
 
-echo "3/6 aapt2 link → base.apk"
+echo "3/6 aapt2 compile+link → base.apk"
 sed 's#<manifest xmlns:android="http://schemas.android.com/apk/res/android">#<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.superconnect.receiver">#' \
   "$HERE/app/src/main/AndroidManifest.xml" > "$OUT/AndroidManifest.xml"
+# Compile app resources (res/ — e.g. drawable/ic_launcher) to .flat, then link with -R so the manifest's
+# @drawable/... references resolve. (Was missing → aapt2 "resource ic_launcher not found" once kotlinc
+# stopped failing first; Android Studio/Gradle does this compile step for you.)
+RES_FLAGS=()
+if [ -d "$HERE/app/src/main/res" ]; then
+  "$BT/aapt2" compile --dir "$HERE/app/src/main/res" -o "$OUT/res.zip"
+  RES_FLAGS=(-R "$OUT/res.zip" --auto-add-overlay)
+fi
 "$BT/aapt2" link -o "$OUT/base.apk" -I "$AJAR" --manifest "$OUT/AndroidManifest.xml" \
+  "${RES_FLAGS[@]}" \
   --min-sdk-version 24 --target-sdk-version 36 --version-code 1 --version-name 0.1
 
 echo "4/6 add classes.dex"
