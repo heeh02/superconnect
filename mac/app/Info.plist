@@ -3,17 +3,17 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Superconnect</string>
+    <string>Superconnect FOSS Preview</string>
     <key>CFBundleDisplayName</key>
-    <string>Superconnect</string>
+    <string>Superconnect FOSS Preview</string>
     <key>CFBundleIdentifier</key>
-    <string>com.superconnect.mac</string>
+    <string>com.superconnect.foss.preview</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>3</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.2.0</string>
+    <string>0.2.1</string>
     <key>CFBundleExecutable</key>
-    <string>superconnect-app</string>
+    <string>superconnect-app-foss-preview</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>
@@ -23,7 +23,7 @@
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Superconnect captures your Mac screen to stream it to the tablet.</string>
+    <string>Superconnect FOSS Preview captures your Mac screen to stream it to the tablet.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Superconnect 通过本地网络发现并连接同一 Wi‑Fi 下的平板（无线投屏）。</string>
     <key>NSBluetoothAlwaysUsageDescription</key>

@@ -9,13 +9,22 @@ final class AppEnvironment {
 
     init() {
         let manual = ManualDiscovery()
-        store = DeviceStore(sources: [
-            WiredDiscovery(),          // wired: HarmonyOS tablets over hdc
-            AndroidWiredDiscovery(),   // wired: Android tablets over adb (generic; brand niceties layer on later)
-            manual,                  // wireless: user-entered IPs (mDNS-blocked fallback)
-            WirelessDiscovery(),     // wireless: mDNS/Bonjour auto-discovery (same subnet)
-            BleDiscovery(),          // wireless: BLE bootstrap (cross-subnet auto-discovery + token)
-        ])
+#if SC_FOSS_PREVIEW
+        let sources: [DeviceDiscovery] = [
+            AndroidWiredDiscovery(port: 18888),
+            manual,
+            WirelessDiscovery(),
+        ]
+#else
+        let sources: [DeviceDiscovery] = [
+            WiredDiscovery(),
+            AndroidWiredDiscovery(),
+            manual,
+            WirelessDiscovery(),
+            BleDiscovery(),
+        ]
+#endif
+        store = DeviceStore(sources: sources)
         coordinator = ConnectionCoordinator(
             // Tunnel chosen by ENDPOINT so wired bridges coexist (hdc / adb / future). Wireless dials direct.
             tunnelFor: { endpoint in
@@ -25,7 +34,7 @@ final class AppEnvironment {
                 case .tcp:      return DirectTunnel()
                 }
             },
-            engineFor: { _ in HostConnection() },  // future: .host→HostConnection / .receiver→ReceiverConnection
+            engineFor: { _ in HostConnection() },  // This preview only sends the Mac's display.
             policy: DefaultConnectionPolicy()      // single-active-per-physical-tablet (see docs/CONFLICTS.md)
         )
         viewModel = AppViewModel(store: store, coordinator: coordinator, manual: manual)

@@ -6,9 +6,8 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Android (Kotlin) is the 4th cross-language conformance target: FrameCodec + InputCodec must encode
- * AND decode the golden vectors in proto/vectors.json byte-identically with Swift, C++, and ArkTS — so
- * the Android receiver can never silently diverge on the wire. Pure-JVM (no Android), runs off-device:
+ * Android (Kotlin) frame conformance for the ViewOnly receiver. INPUT has no product consumer in this
+ * composition; the canonical Core ABI remains qualified separately. Pure-JVM (no Android), runs off-device:
  *   ./gradlew :protocol:test
  */
 class WireConformanceTest {
@@ -80,27 +79,6 @@ class WireConformanceTest {
             var threw = false
             try { FrameDecoder().push(header) } catch (_: IllegalStateException) { threw = true }
             assertEquals("oversize length $name must be rejected", true, threw)
-        }
-    }
-
-    @Test fun inputRecordSize() {
-        assertEquals(vectors().getInt("inputRecordSize"), InputCodec.RECORD_SIZE)
-    }
-
-    @Test fun inputVectors() {
-        val arr = vectors().getJSONArray("inputVectors")
-        for (i in 0 until arr.length()) {
-            val v = arr.getJSONObject(i)
-            val e = InputEvent(
-                type = v.getInt("type"), tool = v.getInt("tool"), buttons = v.getInt("buttons"), flags = v.getInt("flags"),
-                timestampMs = v.getLong("timestampMs"),
-                x = v.getDouble("x").toFloat(), y = v.getDouble("y").toFloat(), pressure = v.getDouble("pressure").toFloat(),
-                tiltX = v.getDouble("tiltX").toFloat(), tiltY = v.getDouble("tiltY").toFloat(),
-                scrollX = v.getDouble("scrollX").toFloat(), scrollY = v.getDouble("scrollY").toFloat(),
-                keyCode = v.getInt("keyCode"), pointerId = v.getInt("pointerId"),
-            )
-            assertEquals("input encode ${v.getString("name")}", v.getString("recordHex"), hex(InputCodec.encode(e)))
-            assertEquals("input round-trip ${v.getString("name")}", e, InputCodec.decode(InputCodec.encode(e)))
         }
     }
 }

@@ -1,0 +1,46 @@
+[package]
+name = "superconnect-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "superconnect_core"
+crate-type = ["staticlib", "rlib"]
+
+[features]
+default = ["full"]
+full = []
+ffi-test-hooks = []
+
+[dependencies]
+aes = { version = "0.9.2", default-features = false, features = ["zeroize"] }
+aes-gcm = { version = "0.11.0", default-features = false, features = ["aes", "zeroize"] }
+ghash = { version = "0.6.0", default-features = false, features = ["zeroize"] }
+hkdf = { version = "0.13.0", default-features = false }
+hmac = { version = "0.13.0", default-features = false, features = ["zeroize"] }
+p256 = { version = "0.13.2", default-features = false, features = ["ecdh"] }
+sha2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
+serde = "1"
+serde_json = "1"
+zeroize = { version = "1.9.0", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+
+[build-dependencies]
+serde_json = "1"
+sha2 = { version = "0.11.0", default-features = false }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "debuginfo"
+
+[profile.dev-ffi]
+inherits = "dev"
+panic = "unwind"
+
+[profile.ffi-release]
+inherits = "release"
+panic = "unwind"

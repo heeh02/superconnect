@@ -50,3 +50,7 @@ harmony/**/.preview/
 android/*.apk
 android/*.apk.idsig
 android/**/build/
+/core/target/
+/android/.gradle/
+/android/.kotlin/
+/android/**/.cxx/

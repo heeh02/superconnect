@@ -28,11 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Main window hosting the unified dashboard.
         let content = NSHostingController(rootView: DashboardView(vm: env.viewModel))
         let win = NSWindow(contentViewController: content)
-        win.title = "Superconnect"
+        win.title = FOSSPreviewProduct.appName
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         win.setContentSize(NSSize(width: 900, height: 580))
         win.center()
-        win.setFrameAutosaveName("SuperconnectMain")
+        win.setFrameAutosaveName("SuperconnectFOSSPreviewMain")
         win.isReleasedWhenClosed = false
         window = win
         win.makeKeyAndOrderFront(nil)
@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Menu-bar quick access + state glyph.
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "display", accessibilityDescription: "Superconnect")
+            button.image = NSImage(systemSymbolName: "display", accessibilityDescription: FOSSPreviewProduct.appName)
             button.image?.isTemplate = true
             button.action = #selector(showWindow(_:))
             button.target = self
@@ -53,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] states in
                 let anyConnected = states.values.contains { $0.isConnected }
                 let name = anyConnected ? "display.and.arrow.down" : "display"
-                let img = NSImage(systemSymbolName: name, accessibilityDescription: "Superconnect")
+                let img = NSImage(systemSymbolName: name, accessibilityDescription: FOSSPreviewProduct.appName)
                 img?.isTemplate = true
                 self?.statusItem.button?.image = img
             }
@@ -95,10 +95,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appItem = NSMenuItem()
         mainMenu.addItem(appItem)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "隐藏 Superconnect", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "隐藏 \(FOSSPreviewProduct.appName)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "隐藏其他", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h").keyEquivalentModifierMask = [.command, .option]
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "退出 Superconnect", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "退出 \(FOSSPreviewProduct.appName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
 
         let winItem = NSMenuItem()

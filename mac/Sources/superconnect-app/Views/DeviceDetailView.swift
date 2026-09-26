@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The detail pane for the selected device: header + connect control + (when connected) live
-/// telemetry + a Permissions section (Screen Recording / Accessibility, with a grant button) +
+/// telemetry + a Screen Recording permission section +
 /// read-only negotiated info. Reuses ConnectionToggle / AdvancedPanel / StatusDot / TransportBadge.
 struct DeviceDetailView: View {
     @ObservedObject var vm: AppViewModel
@@ -36,33 +36,34 @@ struct DeviceDetailView: View {
                         }
                         Text("越高越清晰、越占带宽。连接时拖动实时生效；未连接时的设置会在连接后应用。")
                             .font(.caption).foregroundStyle(.tertiary)
-                        Divider()
-                        Toggle("强制 H.264（兼容模式）", isOn: $vm.forceH264)
-                        Text("个别安卓设备的 HEVC 解码异常（黑屏/花屏）时开启；默认自动协商（优先 HEVC）。切换在下次连接生效。")
-                            .font(.caption).foregroundStyle(.tertiary)
+                        Text("使用 H.264 兼容模式，适配 Android 与卓易通接收端。")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
                 }
 
                 if isThisConnected, let t = deviceTelemetry {
-                    GroupBox("画面") { AdvancedPanel(telemetry: t).padding(6) }
+                    GroupBox("画面") {
+                        HStack {
+                            Image(systemName: "display").foregroundStyle(.tint)
+                            Text(t.resolution)
+                            Spacer()
+                            Text(t.codec.uppercased()).foregroundStyle(.secondary)
+                        }.padding(10)
+                    }
                 }
 
                 GroupBox("权限") {
                     VStack(alignment: .leading, spacing: 8) {
                         permRow("屏幕录制", vm.screenRecordingOK)
-                        permRow("辅助功能（输入注入）", vm.accessibilityOK)
-                        if !(vm.screenRecordingOK && vm.accessibilityOK) {
+                        if !vm.screenRecordingOK {
                             Button("授予权限 / 打开系统设置") { vm.requestPermissions() }
                                 .controlSize(.small)
                         }
-                        // Safety net: 辅助功能 shows 已授权 but触控/手写仍无效 ⇒ a stale TCC entry; reset & re-grant.
-                        if vm.accessibilityOK {
-                            Button("已授权却无触控？重置并重新授权辅助功能") { vm.regrantAccessibility() }
-                                .controlSize(.small)
-                        }
-                        Text("本应用使用稳定签名，权限会跨重新构建保留，正常无需重授；仅在「已授权却无效」时用上面的重置。")
+                        Toggle("允许平板触控、手写笔与键盘", isOn: $vm.pointerControlEnabled)
+                        if vm.pointerControlEnabled { permRow("辅助功能（控制画面）", vm.accessibilityOK) }
+                        Text("仅观看只需要屏幕录制。开启控制后，需允许辅助功能；可随时关闭。")
                             .font(.caption).foregroundStyle(.tertiary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -80,6 +81,18 @@ struct DeviceDetailView: View {
                     .padding(8)
                 }
 
+                GroupBox("更多协作方式") {
+                    VStack(spacing: 12) {
+                        HStack {
+                            Label("触控、手写笔与键盘", systemImage: "hand.draw")
+                            Spacer()
+                            Text(vm.pointerControlEnabled && vm.accessibilityOK ? "已开启" : "在权限中开启")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        lockedRow("文件传输", icon: "doc.on.doc")
+                    }.padding(10)
+                }
+
                 Spacer(minLength: 0)
             }
             .padding(24)
@@ -87,6 +100,7 @@ struct DeviceDetailView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .navigationTitle(vm.displayName(for: device))
+        .background(FOSSPreviewAppearance.background)
     }
 
     private var header: some View {
@@ -127,5 +141,14 @@ struct DeviceDetailView: View {
 
     private func infoRow(_ label: String, _ value: String) -> some View {
         HStack { Text(label).foregroundStyle(.secondary); Spacer(); Text(value) }
+    }
+
+    private func lockedRow(_ title: String, icon: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).frame(width: 20).foregroundStyle(.secondary)
+            Text(title)
+            Spacer()
+            Label("后续解锁", systemImage: "lock.fill").font(.caption).foregroundStyle(.secondary)
+        }
     }
 }

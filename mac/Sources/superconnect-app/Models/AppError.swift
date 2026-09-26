@@ -5,9 +5,10 @@ import Foundation
 enum AppError: Error, Equatable {
     case hdcNotFound
     case needsScreenRecording
-    case needsAccessibility
+    case authFailed
     case tunnelFailed
     case connectionFailed
+    case videoUnavailable
     case receiverNotSupported
     case pairingRejected
     case wirelessUnreachable
@@ -19,12 +20,14 @@ enum AppError: Error, Equatable {
             return "未找到设备连接工具，请确认已安装 DevEco Studio"
         case .needsScreenRecording:
             return "请在「系统设置 › 隐私与安全性 › 屏幕录制」中允许 Superconnect，然后重试"
-        case .needsAccessibility:
-            return "请在「系统设置 › 隐私与安全性 › 辅助功能」中允许 Superconnect，然后重试"
+        case .authFailed:
+            return "安全连接验证失败。请在平板端重新确认配对后重试"
         case .tunnelFailed:
             return "无法建立与设备的连接通道，请重新插拔后重试"
         case .connectionFailed:
             return "连接已断开，正在自动重连…"
+        case .videoUnavailable:
+            return "无法获取 Mac 画面，请检查录屏权限后重试"
         case .receiverNotSupported:
             return "此设备方向暂不支持（即将推出）"
         case .pairingRejected:

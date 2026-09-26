@@ -13,4 +13,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "SuperconnectReceiver"
-include(":protocol", ":app")
+include(":protocol", ":core-wire", ":app")

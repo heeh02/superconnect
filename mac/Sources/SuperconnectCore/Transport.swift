@@ -9,6 +9,14 @@ public enum TransportState: Equatable {
     case cancelled
 }
 
+/// Terminal result for admission to the local reliable route. `.submitted` means Network.framework
+/// processed the local send request; it is deliberately not a peer receive/decode acknowledgement.
+public enum TransportLocalSendOutcome: Equatable, Sendable {
+    case submitted
+    case failed
+    case cancelled
+}
+
 /// L1 — the swap boundary. A Transport is *any* reliable, ordered,
 /// bidirectional byte stream. Today the only impl is `TcpTransport`
 /// (used for BOTH wired `hdc fport` over USB and future LAN/Wi-Fi).
@@ -18,7 +26,49 @@ public protocol Transport: AnyObject {
     var onStateChange: ((TransportState) -> Void)? { get set }
     func start()
     func send(_ data: Data)
+    /// `completion` fires when the connection has DRAINED these bytes (TCP: .contentProcessed) —
+    /// the video send-gate uses it as the "link is ready for the next frame" signal. It fires on
+    /// success AND failure so a dead link can never latch the gate shut.
+    func send(_ data: Data, completion: (() -> Void)?)
+    /// Enqueue one logical message made from multiple byte ranges. No other caller's bytes may be
+    /// inserted between `parts`: FrameCodec header + VideoFrameMeta + encoded AU must remain one
+    /// contiguous TCP record even when CONTROL/INPUT writers run concurrently. Implementations that
+    /// can scatter/gather should override this to avoid copying.
+    func send(parts: [Data], completion: (() -> Void)?)
+    /// Typed local-route terminal used by media conservation. Alternate transports inherit a
+    /// success-only adapter; TcpTransport overrides it to preserve failure and cancellation.
+    func sendLogicalMessage(
+        parts: [Data],
+        localCompletion: ((TransportLocalSendOutcome) -> Void)?
+    )
     func stop()
+}
+
+public extension Transport {
+    /// Default: no drain signal available → report completion immediately (mocks, loopback tests).
+    func send(_ data: Data, completion: (() -> Void)?) {
+        send(data)
+        completion?()
+    }
+
+    /// Correctness-first fallback for mocks/alternate transports: collapse the logical message into
+    /// one `send`. TcpTransport overrides this with a zero-full-frame-copy serialized writer.
+    func send(parts: [Data], completion: (() -> Void)? = nil) {
+        guard !parts.isEmpty else {
+            completion?()
+            return
+        }
+        var message = Data(capacity: parts.reduce(0) { $0 + $1.count })
+        for part in parts { message.append(part) }
+        send(message, completion: completion)
+    }
+
+    func sendLogicalMessage(
+        parts: [Data],
+        localCompletion: ((TransportLocalSendOutcome) -> Void)?
+    ) {
+        send(parts: parts) { localCompletion?(.submitted) }
+    }
 }
 
 /// TCP implementation over Network.framework.
@@ -36,13 +86,15 @@ public final class TcpTransport: Transport {
     private let pinnedToPhysical: Bool
     private var watchdog: DispatchWorkItem?
     private var becameReady = false
+    private var cancelling = false
+    private var nextMessageID: UInt64 = 0   // queue-confined; tags multipart ContentContexts
 
     /// `avoidVirtualInterfaces` (set by the caller for WIRELESS/LAN targets): exclude virtual (VPN /
     /// utun) interfaces so a VPN such as EasyConnect — which routes the tablet's LAN IP into its tunnel
     /// — cannot hijack the connection; the socket then binds to the physical Wi-Fi/Ethernet path. It
     /// is IGNORED for loopback (hdc / 127.0.0.1 / ::1), where it would be both unnecessary and wrong.
     /// Deliberately NOT `requiredInterfaceType = .wifi`, so wired Ethernet stays a valid path.
-    public init(host: String, port: UInt16, avoidVirtualInterfaces: Bool = false) {
+    public init(host: String, port: UInt16, avoidVirtualInterfaces: Bool = false, lowLatency: Bool = false) {
         let endpointHost = NWEndpoint.Host(host)
         let endpointPort = NWEndpoint.Port(rawValue: port)!
         let params = NWParameters.tcp
@@ -50,6 +102,10 @@ public final class TcpTransport: Transport {
         if let tcpOptions = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
             tcpOptions.noDelay = true
         }
+        // Paid pro-mode QoS: tag the flow .interactiveVideo so a WMM-enabled AP / the OS schedules it in
+        // the Wi-Fi video access category (AC_VI, ~DSCP 34) ahead of best-effort traffic — measurably lower
+        // p95 jitter/tail latency on a shared/congested Wi-Fi. Reliable TCP remains the fallback.
+        if lowLatency { params.serviceClass = .interactiveVideo }
         let loopback = TcpTransport.isLoopback(host)
         let pin = avoidVirtualInterfaces && !loopback
         if pin {
@@ -106,14 +162,74 @@ public final class TcpTransport: Transport {
     }
 
     public func send(_ data: Data) {
-        connection.send(content: data, completion: .contentProcessed { [weak self] error in
-            if let error { self?.onStateChange?(.failed(error.localizedDescription)) }
-        })
+        send(data, completion: nil)
+    }
+
+    public func send(_ data: Data, completion: (() -> Void)?) {
+        send(parts: [data], completion: completion)
+    }
+
+    public func send(parts: [Data], completion: (() -> Void)? = nil) {
+        sendLogicalMessage(parts: parts) { _ in completion?() }
+    }
+
+    public func sendLogicalMessage(
+        parts: [Data],
+        localCompletion: ((TransportLocalSendOutcome) -> Void)?
+    ) {
+        // Every outbound call — CONTROL, INPUT and multipart VIDEO — enters this ONE serial queue.
+        // A multipart block invokes all NWConnection sends before the next queued block can run, so
+        // no concurrent control send can split a FrameCodec logical record. Network.framework keeps
+        // send invocation order on the byte stream; the final .contentProcessed therefore also means
+        // all preceding parts of this logical message have drained locally.
+        queue.async { [weak self] in
+            guard let self else {
+                localCompletion?(.cancelled)
+                return
+            }
+            guard !self.cancelling else {
+                localCompletion?(.cancelled)
+                return
+            }
+            let nonEmpty = parts.filter { !$0.isEmpty }
+            guard !nonEmpty.isEmpty else {
+                localCompletion?(.submitted)
+                return
+            }
+            self.nextMessageID &+= 1
+            let context = NWConnection.ContentContext(
+                identifier: "superconnect.message.\(self.nextMessageID)",
+                metadata: []
+            )
+            for part in nonEmpty.dropLast() {
+                self.connection.send(content: part, contentContext: context, isComplete: false,
+                                     completion: .idempotent)
+            }
+            self.connection.send(content: nonEmpty[nonEmpty.count - 1], contentContext: context,
+                                 isComplete: true,
+                                 completion: .contentProcessed { [weak self] error in
+                guard let self else {
+                    localCompletion?(.cancelled)
+                    return
+                }
+                if let error { self.onStateChange?(.failed(error.localizedDescription)) }
+                if self.cancelling {
+                    localCompletion?(.cancelled)
+                } else if error != nil {
+                    localCompletion?(.failed)
+                } else {
+                    localCompletion?(.submitted)
+                }
+            })
+        }
     }
 
     public func stop() {
         watchdog?.cancel()
-        connection.cancel()
+        queue.async {
+            self.cancelling = true
+            self.connection.cancel()
+        }
     }
 
     // MARK: - internals
@@ -141,7 +257,9 @@ public final class TcpTransport: Transport {
         return "path[status=\(p.status) wifi=\(p.usesInterfaceType(.wifi)) eth=\(p.usesInterfaceType(.wiredEthernet)) other=\(p.usesInterfaceType(.other))]"
     }
 
-    private static func isLoopback(_ host: String) -> Bool {
+    /// Whether `host` is genuine loopback (wired hdc/USB forward). Used as a CLIENT-side fact to decide
+    /// the SC-AUTH-v1 auth exemption — never trust the peer's omission of a challenge (audit H4 fail-open).
+    public static func isLoopback(_ host: String) -> Bool {
         let h = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return h == "localhost" || h == "::1" || h == "::ffff:127.0.0.1" || h.hasPrefix("127.")
     }
@@ -159,7 +277,18 @@ public final class TcpTransport: Transport {
     private static var cachedAt: Date = .distantPast
     private static let cacheTTL: TimeInterval = 10
 
-    private static func physicalInterface() -> NWInterface? {
+    /// A network path generation invalidates both the address and its interface scope. Without this,
+    /// the first reconnect after Wi-Fi A→B can reuse the previous NWInterface for up to ten seconds.
+    public static func invalidatePhysicalInterfaceCache() {
+        cacheLock.lock()
+        cachedInterface = nil
+        cachedAt = .distantPast
+        cacheLock.unlock()
+    }
+
+    /// Public for the separately linked private UDP driver, which pins to the SAME physical interface
+    /// so VIDEO datagrams cannot egress a VPN/utun while the TCP control path uses en0.
+    public static func physicalInterface() -> NWInterface? {
         cacheLock.lock()
         if let c = cachedInterface, Date().timeIntervalSince(cachedAt) < cacheTTL {
             cacheLock.unlock(); return c
@@ -187,7 +316,8 @@ public final class TcpTransport: Transport {
     }
 
     /// Append a diagnostic line to /tmp/sc-mac-diag.log (shared with the app's BLE/host diag). Self-bounding.
-    private static func diag(_ s: String) {
+    /// Public so the separately linked private UDP driver can log its interface-pin decision here too.
+    public static func diag(_ s: String) {
         let path = "/tmp/sc-mac-diag.log"
         if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
            let size = attrs[.size] as? Int, size > 256 * 1024 {

@@ -1,6 +1,7 @@
 package com.superconnect.receiver
 
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.os.Build
 import android.view.Surface
@@ -20,11 +21,13 @@ class VideoDecoder(
     private val width: Int,
     private val height: Int,
     private val surface: Surface,
+    private val generation: Long,
+    private val isGenerationActive: (Long) -> Boolean,
+    private val onFirstFrame: () -> Unit = {},
     private val log: (String) -> Unit = {},
 ) {
     private var codec: MediaCodec? = null
-    private val frames = ArrayDeque<ByteArray>()
-    private val lock = Object()
+    private val frames = GenerationBoundAccessUnitQueue(MAX_QUEUED_FRAMES)
     @Volatile private var running = false
     private var worker: Thread? = null
     private var heldInput = -1
@@ -33,47 +36,51 @@ class VideoDecoder(
     fun start() {
         val c = MediaCodec.createDecoderByType(mime)
         val fmt = MediaFormat.createVideoFormat(mime, width, height)
-        if (Build.VERSION.SDK_INT >= 30) fmt.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-        c.configure(fmt, surface, null, 0)
-        c.start()
+        var stage = "configure"
+        try {
+            if (Build.VERSION.SDK_INT >= 30 && c.codecInfo.getCapabilitiesForType(mime)
+                    .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)) {
+                fmt.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            }
+            c.configure(fmt, surface, null, 0)
+            stage = "start"
+            c.start()
+        } catch (error: Exception) {
+            val name = c.name
+            c.release()
+            throw IllegalStateException("$name $stage: ${error.message}", error)
+        }
         codec = c
         running = true
         worker = thread(name = "sc-decoder", isDaemon = true) { loop(c) }
         log("decoder started $mime ${width}x$height")
     }
 
-    /** Enqueue one encoded frame (Annex-B). Newest-wins: drop the oldest if we're backing up. */
-    fun submit(frame: ByteArray) {
-        synchronized(lock) {
-            while (frames.size > 4) frames.removeFirst()
-            frames.addLast(frame)
-            lock.notifyAll()
-        }
-    }
-
-    private fun nextFrame(timeoutMs: Long): ByteArray? {
-        synchronized(lock) {
-            if (frames.isEmpty()) { try { lock.wait(timeoutMs) } catch (_: InterruptedException) {} }
-            return if (frames.isEmpty()) null else frames.removeFirst()
-        }
-    }
+    /** Takes ownership of one Annex-B access unit only when the running decoder queues it. */
+    fun submit(frame: ByteArray): Boolean =
+        frames.offer(frame) { running && isGenerationActive(generation) }
 
     private fun loop(c: MediaCodec) {
         val info = MediaCodec.BufferInfo()
         var rendered = 0
         var fed = 0
         try {
-            while (running) {
+            while (running && isGenerationActive(generation)) {
                 if (heldInput < 0) heldInput = c.dequeueInputBuffer(5_000)
                 if (heldInput >= 0) {
-                    val frame = nextFrame(5)
+                    val frame = frames.take(5) { running && isGenerationActive(generation) }
                     if (frame != null) {
-                        val ib = c.getInputBuffer(heldInput)
-                        if (ib != null) {
-                            ib.clear(); ib.put(frame)
-                            c.queueInputBuffer(heldInput, 0, frame.size, ptsUs, 0)
-                            ptsUs += 16_666   // ~60 fps spacing; PTS only needs to be monotonic for display
-                            if (++fed <= 2) log("fed input #$fed (${frame.size}B)")
+                        try {
+                            if (!running || !isGenerationActive(generation)) continue
+                            val ib = c.getInputBuffer(heldInput)
+                            if (ib != null) {
+                                ib.clear(); ib.put(frame)
+                                c.queueInputBuffer(heldInput, 0, frame.size, ptsUs, 0)
+                                ptsUs += 16_666   // ~60 fps spacing; PTS only needs to be monotonic for display
+                                if (++fed <= 2) log("fed input #$fed (${frame.size}B)")
+                            }
+                        } finally {
+                            frame.fill(0)
                         }
                         heldInput = -1
                     }
@@ -81,8 +88,12 @@ class VideoDecoder(
                 var outIdx = c.dequeueOutputBuffer(info, 0)
                 if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) log("output format: ${c.outputFormat}")
                 while (outIdx >= 0) {
-                    c.releaseOutputBuffer(outIdx, true)   // render to the Surface
-                    if (++rendered == 1) log("FIRST FRAME RENDERED ✓")
+                    val render = running && isGenerationActive(generation)
+                    c.releaseOutputBuffer(outIdx, render)
+                    if (render && ++rendered == 1) {
+                        log("FIRST FRAME RENDERED ✓")
+                        onFirstFrame()
+                    }
                     outIdx = c.dequeueOutputBuffer(info, 0)
                 }
             }
@@ -93,6 +104,7 @@ class VideoDecoder(
 
     fun stop() {
         running = false
+        frames.wipe()
         // Join the worker BEFORE releasing the codec. The worker loop calls dequeue/queue/release on the
         // same MediaCodec instance; stopping/releasing it from another thread while the worker is mid-call is
         // concurrent single-codec use — it can throw IllegalStateException or abort in native code (SIGABRT),
@@ -105,9 +117,13 @@ class VideoDecoder(
         try { codec?.stop() } catch (_: Exception) {}
         try { codec?.release() } catch (_: Exception) {}
         codec = null
+        heldInput = -1
+        frames.wipe()
     }
 
     companion object {
+        private const val MAX_QUEUED_FRAMES = 4
+
         fun mimeFor(codec: String): String =
             if (codec.equals("hevc", true) || codec.equals("h265", true)) "video/hevc" else "video/avc"
     }

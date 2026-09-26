@@ -1,58 +1,46 @@
-#!/bin/zsh
-# Build + install the Android receiver APK WITHOUT Gradle — for quick on-device iteration when you
-# only have the Android SDK + Android Studio's bundled Kotlin compiler (no gradle/wrapper). The app has
-# NO external deps (just the local :protocol sources + the Android framework), so a manual
-# kotlinc → d8 → aapt2 → sign → adb install pipeline works. For a normal build use Android Studio.
-#
-# Usage:  android/build-apk.sh [--no-install]
-set -e
-HERE="$(cd "$(dirname "$0")" && pwd)"            # android/
-SDK="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
-STUDIO="/Applications/Android Studio.app/Contents"
-export JAVA_HOME="${JAVA_HOME:-$STUDIO/jbr/Contents/Home}"
-KOTLINC="$STUDIO/plugins/Kotlin/kotlinc/bin/kotlinc"
-KSTDLIB="$STUDIO/plugins/Kotlin/kotlinc/lib/kotlin-stdlib.jar"
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Pick the newest installed build-tools + platform android.jar.
-BT="$SDK/build-tools/$(ls "$SDK/build-tools" | sort -V | tail -1)"
-AJAR="$(ls "$SDK/platforms"/*/android.jar | sort -V | tail -1)"
-ADB="$SDK/platform-tools/adb"
-for f in "$KOTLINC" "$KSTDLIB" "$AJAR" "$BT/aapt2" "$BT/d8" "$BT/zipalign" "$BT/apksigner"; do
-  [ -e "$f" ] || { echo "✗ missing tool: $f"; exit 1; }
-done
-echo "▸ SDK=$SDK  build-tools=$(basename "$BT")  platform=$(basename "$(dirname "$AJAR")")"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-OUT="${TMPDIR:-/tmp}/sc-apk"; rm -rf "$OUT"; mkdir -p "$OUT/classes" "$OUT/dex"
-
-echo "1/6 kotlinc → classes"
-SRCS=$(find "$HERE/protocol/src/main/kotlin" "$HERE/app/src/main/kotlin" -name '*.kt')
-"$KOTLINC" -cp "$AJAR" -jvm-target 17 -d "$OUT/classes" ${=SRCS}
-
-echo "2/6 d8 → classes.dex (+ kotlin-stdlib)"
-CLS=$(find "$OUT/classes" -name '*.class')
-"$BT/d8" --min-api 24 --lib "$AJAR" --output "$OUT/dex" ${=CLS} "$KSTDLIB"
-
-echo "3/6 aapt2 link → base.apk"
-sed 's#<manifest xmlns:android="http://schemas.android.com/apk/res/android">#<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.superconnect.receiver">#' \
-  "$HERE/app/src/main/AndroidManifest.xml" > "$OUT/AndroidManifest.xml"
-"$BT/aapt2" link -o "$OUT/base.apk" -I "$AJAR" --manifest "$OUT/AndroidManifest.xml" \
-  --min-sdk-version 24 --target-sdk-version 36 --version-code 1 --version-name 0.1
-
-echo "4/6 add classes.dex"
-cp "$OUT/base.apk" "$OUT/unsigned.apk"
-( cd "$OUT/dex" && zip -q -j "$OUT/unsigned.apk" classes.dex )
-
-echo "5/6 zipalign + sign (debug key)"
-"$BT/zipalign" -f 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
-KS="$HOME/.android/debug.keystore"
-[ -f "$KS" ] || { mkdir -p "$HOME/.android"; "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$KS" \
-  -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-  -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1; }
-"$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --key-pass pass:android \
-  --out "$HERE/app-debug.apk" "$OUT/aligned.apk"
-echo "✓ built $HERE/app-debug.apk"
-
-if [[ "$1" != "--no-install" ]]; then
-  echo "6/6 adb install (approve 'Install via USB' on the phone if prompted)"
-  "$ADB" install -r "$HERE/app-debug.apk"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  if ! pmset -g batt | grep -Fq "Now drawing from 'AC Power'"; then
+    printf '%s\n' "android_build_mac_requires_ac_power" >&2
+    exit 1
+  fi
 fi
+
+if [[ ! -x "$ROOT/gradlew" ]]; then
+  printf '%s\n' "android_build_missing_pinned_gradle_wrapper" >&2
+  exit 1
+fi
+
+check_sha256() {
+  local path="$1" expected="$2" code="$3"
+  if [[ ! -f "$path" ]] || [[ "$(shasum -a 256 "$path" | awk '{print $1}')" != "$expected" ]]; then
+    printf '%s\n' "$code" >&2
+    exit 1
+  fi
+}
+
+check_sha256 \
+  "$ROOT/gradle/wrapper/gradle-wrapper.jar" \
+  "498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17" \
+  "android_build_missing_or_wrong_wrapper_jar"
+check_sha256 \
+  "$ROOT/gradle/verification-metadata.xml" \
+  "b2f3dea272364b03b00c2d4bc50a2f8e6a3c68309cb2789a7e3c1a49c79957a4" \
+  "android_build_missing_or_wrong_dependency_verification"
+
+if [[ -z "${JAVA_HOME:-}" || ! -x "$JAVA_HOME/bin/java" ]]; then
+  printf '%s\n' "android_build_missing_temurin_17" >&2
+  exit 1
+fi
+java_facts="$($JAVA_HOME/bin/java -XshowSettings:properties -version 2>&1)"
+if ! grep -Fq 'java.vendor = Eclipse Adoptium' <<<"$java_facts" ||
+   ! grep -Eq 'java.version = 17([.]|$)' <<<"$java_facts"; then
+  printf '%s\n' "android_build_requires_temurin_17" >&2
+  exit 1
+fi
+
+exec "$ROOT/gradlew" --no-daemon --dependency-verification=strict -p "$ROOT" :app:assembleDebug

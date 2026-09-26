@@ -20,6 +20,8 @@ struct DashboardView: View {
             }
         }
         .frame(minWidth: 780, minHeight: 480)
+        .tint(FOSSPreviewAppearance.accent)
+        .background(FOSSPreviewAppearance.background)
         .onAppear { vm.onAppear() }
     }
 
@@ -55,6 +57,7 @@ struct DashboardView: View {
             Divider()
             addWirelessFooter
         }
+        .background(FOSSPreviewAppearance.sidebar)
     }
 
     /// Footer: add a tablet by IP for wireless connect (the mDNS-blocked fallback). Accepts
@@ -88,8 +91,8 @@ struct DashboardView: View {
     private var placeholder: some View {
         VStack(spacing: 10) {
             Image(systemName: "sidebar.left").font(.system(size: 42)).foregroundStyle(.secondary)
-            Text("选择一台设备").font(.title3)
-            Text("从左侧选择设备，查看状态并连接").font(.callout).foregroundStyle(.secondary)
+            Text("让你的工作空间，再大一点。").font(.title2).fontWeight(.semibold)
+            Text("连接平板，把它变成 Mac 的另一块屏幕。").font(.callout).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

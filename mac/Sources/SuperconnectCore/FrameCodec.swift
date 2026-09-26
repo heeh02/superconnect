@@ -1,4 +1,5 @@
 import Foundation
+import SuperconnectCoreFFI
 
 /// Logical multiplexing channels. See proto/protocol.md §2.
 public enum Channel: UInt8 {
@@ -47,16 +48,14 @@ public enum FrameCodec {
     public static let maxPayload = 16 * 1024 * 1024 // 16 MiB
 
     public static func encode(channel: UInt8, flags: UInt8, payload: Data) -> Data {
-        var out = Data(capacity: headerSize + payload.count)
-        out.append(channel)
-        out.append(flags)
-        let len = UInt32(payload.count)
-        out.append(UInt8(len & 0xff))
-        out.append(UInt8((len >> 8) & 0xff))
-        out.append(UInt8((len >> 16) & 0xff))
-        out.append(UInt8((len >> 24) & 0xff))
-        out.append(payload)
-        return out
+        RustWireRuntime.encodeFrame(channel: channel, flags: flags, payload: payload)
+    }
+
+    /// Header only. The sender may write the 6-byte header and the payload as two back-to-back sends
+    /// on the same ordered stream — byte-identical on the wire to encode(channel:flags:payload:), but
+    /// avoids copying the whole payload into a fresh frame buffer (biggest on IDRs).
+    public static func encodeHeader(channel: UInt8, flags: UInt8, payloadLength: Int) -> Data {
+        RustWireRuntime.encodeFrameHeader(channel: channel, flags: flags, payloadLength: payloadLength)
     }
 
     public static func encode(_ frame: Frame) -> Data {
@@ -72,34 +71,63 @@ public enum FrameCodec {
 /// Tolerant of arbitrary fragmentation (one frame split across many reads,
 /// or many frames in one read).
 public final class FrameDecoder {
-    private var buffer = [UInt8]()
-
-    public init() {}
+    private let handle: OpaquePointer
+    private var pendingHeader = [UInt8]()
+    private var pendingPayloadBytes = 0
+    public init() { handle = RustWireRuntime.makeFrameDecoder() }
+    deinit { RustWireRuntime.freeFrameDecoder(handle) }
 
     public func push(_ data: Data) throws -> [Frame] {
-        buffer.append(contentsOf: data)
         var frames = [Frame]()
-        var cursor = 0
-        while buffer.count - cursor >= FrameCodec.headerSize {
-            let base = cursor
-            let channel = buffer[base]
-            let flags = buffer[base + 1]
-            let len = Int(buffer[base + 2])
-                | (Int(buffer[base + 3]) << 8)
-                | (Int(buffer[base + 4]) << 16)
-                | (Int(buffer[base + 5]) << 24)
-            if len > FrameCodec.maxPayload {
-                throw FrameError.payloadTooLarge(len)
+        var offset = 0
+        do {
+            while offset < data.count {
+                if pendingPayloadBytes > 0 {
+                    let length = min(pendingPayloadBytes, data.count - offset)
+                    try RustWireRuntime.pushFrameBytes(
+                        data, offset: offset, length: length, into: handle
+                    )
+                    offset += length
+                    pendingPayloadBytes -= length
+                    if pendingPayloadBytes == 0 {
+                        frames += try RustWireRuntime.drainFrames(from: handle)
+                    }
+                    continue
+                }
+
+                let length = min(FrameCodec.headerSize - pendingHeader.count, data.count - offset)
+                for index in offset ..< offset + length {
+                    pendingHeader.append(data[data.index(data.startIndex, offsetBy: index)])
+                }
+                try RustWireRuntime.pushFrameBytes(
+                    data, offset: offset, length: length, into: handle
+                )
+                offset += length
+                guard pendingHeader.count == FrameCodec.headerSize else { continue }
+
+                let declaredLength = Int(pendingHeader[2])
+                    | (Int(pendingHeader[3]) << 8)
+                    | (Int(pendingHeader[4]) << 16)
+                    | (Int(pendingHeader[5]) << 24)
+                pendingHeader.removeAll(keepingCapacity: true)
+                if declaredLength > FrameCodec.maxPayload {
+                    _ = try RustWireRuntime.drainFrames(
+                        from: handle, declaredOversizeLength: declaredLength
+                    )
+                    preconditionFailure("Rust accepted an oversized frame header")
+                }
+                pendingPayloadBytes = declaredLength
+                if declaredLength == 0 {
+                    frames += try RustWireRuntime.drainFrames(from: handle)
+                }
             }
-            let total = FrameCodec.headerSize + len
-            if buffer.count - base < total { break } // wait for more bytes
-            let payloadStart = base + FrameCodec.headerSize
-            let payload = Data(buffer[payloadStart ..< payloadStart + len])
-            frames.append(Frame(channel: channel, flags: flags, payload: payload))
-            cursor += total
+            return frames
+        } catch {
+            RustWireRuntime.resetFrameDecoder(handle)
+            pendingHeader.removeAll(keepingCapacity: true)
+            pendingPayloadBytes = 0
+            throw error
         }
-        if cursor > 0 { buffer.removeFirst(cursor) }
-        return frames
     }
 }
 

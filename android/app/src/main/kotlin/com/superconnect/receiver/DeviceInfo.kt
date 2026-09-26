@@ -1,12 +1,9 @@
 package com.superconnect.receiver
 
 import android.content.Context
-import android.media.MediaCodecList
-import android.media.MediaFormat
 import android.os.Build
 import android.util.DisplayMetrics
 import android.view.WindowManager
-import java.util.UUID
 
 /** Receiver screen caps advertised to the Mac in hello_ack (it sizes the virtual display to these). */
 data class ReceiverCaps(
@@ -42,30 +39,10 @@ object DeviceInfo {
         )
     }
 
-    /** Advertise ONLY decoders this device can actually run, so the Mac never picks a codec that fails
-     *  to decode here (black screen). Queried via MediaCodecList(REGULAR_CODECS) — the same registry
-     *  MediaCodec.createDecoderByType resolves against. H.264 is effectively universal (kept as a floor
-     *  even if the query somehow returns nothing); HEVC is added only when a real HEVC decoder exists.
-     *  Order preserved as before ("h264" first) so the Mac's negotiated choice is unchanged on devices
-     *  that have both — this change only PRUNES hevc on devices that can't decode it. */
-    private fun supportedDecoders(): List<String> {
-        val out = ArrayList<String>(2)
-        out.add("h264")   // floor: virtually every Android device has an H.264 decoder
-        if (hasDecoder(MediaFormat.MIMETYPE_VIDEO_HEVC)) out.add("hevc")
-        return out
-    }
+    /** Advertise only codecs accepted by this composition's canonical video_config consumer.
+     *  Hardware decoder presence alone is insufficient: HEVC stays deferred until the config route
+     *  can preserve and deliver that codec without failing the authenticated Session. */
+    private fun supportedDecoders(): List<String> = advertisedCodecs()
 
-    private fun hasDecoder(mime: String): Boolean = try {
-        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
-            !info.isEncoder && info.supportedTypes.any { it.equals(mime, ignoreCase = true) }
-        }
-    } catch (_: Exception) { false }
-
-    /** Stable per-install id, persisted in SharedPreferences (survives relaunch). */
-    fun peerId(context: Context): String {
-        val prefs = context.getSharedPreferences("sc_identity", Context.MODE_PRIVATE)
-        return prefs.getString("peerId", null) ?: UUID.randomUUID().toString().also {
-            prefs.edit().putString("peerId", it).apply()
-        }
-    }
+    internal fun advertisedCodecs(): List<String> = VideoConfigWireNative.advertisedCodecs
 }

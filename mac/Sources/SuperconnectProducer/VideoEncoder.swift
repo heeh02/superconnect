@@ -78,7 +78,12 @@ public final class VideoEncoder {
         // fps and screen text wants the fidelity.
         set(kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, kCFBooleanFalse)
 
-        VTCompressionSessionPrepareToEncodeFrames(session)
+        let prepareStatus = VTCompressionSessionPrepareToEncodeFrames(session)
+        guard prepareStatus == noErr else {
+            VTCompressionSessionInvalidate(session)
+            throw NSError(domain: "superconnect.encoder", code: Int(prepareStatus),
+                          userInfo: [NSLocalizedDescriptionKey: "encoder preparation failed (\(prepareStatus))"])
+        }
         self.session = session
     }
 
@@ -86,7 +91,7 @@ public final class VideoEncoder {
         guard let session else { return }
         var props: CFDictionary?
         if forceKeyframe { props = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue!] as CFDictionary }
-        VTCompressionSessionEncodeFrame(
+        let status = VTCompressionSessionEncodeFrame(
             session, imageBuffer: pixelBuffer,
             presentationTimeStamp: pts, duration: .invalid,
             frameProperties: props, infoFlagsOut: nil
@@ -95,6 +100,7 @@ public final class VideoEncoder {
             guard status == noErr, let sb = sampleBuffer else { self.onError?("encode failed (\(status))"); return }
             self.emit(sb)
         }
+        if status != noErr { onError?("encode submission failed (\(status))") }
     }
 
     public func stop() {

@@ -16,7 +16,7 @@ final class HostConnection: ConnectionEngine {
     var telemetryPublisher: AnyPublisher<SessionTelemetry, Never>? { telemetrySubject.eraseToAnyPublisher() }
 
     private var bitrateMbps = 50
-    private let maxFps = 120
+    private var pointerInjector: FOSSPointerInjector?
     private var pairingToken: String?   // wireless BLE proximity token to present in hello (nil = none)
     private var avoidVirtualInterfaces = false   // wireless: dial over physical NIC, excluding VPN/utun
     // Set once we've already fallen back from the physical-NIC pin to default routing for a wireless
@@ -39,7 +39,6 @@ final class HostConnection: ConnectionEngine {
     private var session: Session?
     private var virtualDisplay: VirtualDisplay?
     private var producer: Producer?
-    private var injector: InputInjector?
     // Shared, refcounted guard: with multiple simultaneous connections (#51) every HostConnection
     // shares ONE guard so the real-display snapshot is taken once, before any virtual display (#58).
 
@@ -59,12 +58,6 @@ final class HostConnection: ConnectionEngine {
     /// retries (neither bumping the generation), and those ran on arbitrary threads → a storm of
     /// concurrent openSession() racing on transport/session → crash (SIGSEGV in Session.start).
     private let lifeQ = DispatchQueue(label: "superconnect.host.life")
-
-    /// `injector` is written on lifeQ (buildPipeline / teardown) but read on the transport's callback
-    /// thread (onInput/onText), so guard it — an unlocked read while it's being replaced races the
-    /// ARC refcount. Reuses frameLock (always tiny critical sections, no nesting).
-    private func currentInjector() -> InputInjector? { frameLock.lock(); defer { frameLock.unlock() }; return injector }
-    private func setInjector(_ inj: InputInjector?) { frameLock.lock(); injector = inj; frameLock.unlock() }
 
     // MARK: - ConnectionEngine
 
@@ -107,7 +100,8 @@ final class HostConnection: ConnectionEngine {
             if self.guardRetained { DisplayModeGuard.shared.release(); self.guardRetained = false }
             self.frameLock.lock(); let prod = self.producer; self.producer = nil; self.frameLock.unlock()
             let t = self.transport; self.transport = nil
-            self.session = nil; self.virtualDisplay = nil; self.setInjector(nil)
+            self.pointerInjector?.release(); self.pointerInjector = nil
+            self.session = nil; self.virtualDisplay = nil
             // Heavy teardown (producer.stop awaits VTCompressionSession invalidate) OFF the serial
             // queue so it never blocks a subsequent connect; generation bump already neutered callbacks.
             DispatchQueue.global().async {
@@ -177,10 +171,32 @@ final class HostConnection: ConnectionEngine {
     private func openSession(generation gen: Int) {
         guard running, gen == generation else { return }
         let transport = TcpTransport(host: host, port: port, avoidVirtualInterfaces: self.avoidVirtualInterfaces)
-        let session = Session(transport: transport, role: "mac")
+        // FOSS never marks loopback/USB as trusted local. Every route must negotiate SC-AUTH-v1
+        // and activate SC-RECORD-v1 before Core can report the Session ready.
+        let session = FOSSPreviewSessionFactory.live.makeSession(transport: transport)
         session.pairingToken = self.pairingToken   // BLE proximity token (nil for wired/mDNS/manual)
         self.transport = transport
         self.session = session
+        session.onInput = { [weak self] bytes in
+            self?.lifeQ.async {
+                guard let self, self.running, gen == self.generation,
+                      self.session?.hasAuthenticatedRecords == true else { return }
+                self.pointerInjector?.inject(bytes)
+            }
+        }
+        session.onInputReset = { [weak self] _ in
+            self?.lifeQ.async {
+                guard let self, gen == self.generation else { return }
+                self.pointerInjector?.release()
+            }
+        }
+        session.onText = { [weak self] text in
+            self?.lifeQ.async {
+                guard let self, self.running, gen == self.generation,
+                      self.session?.hasAuthenticatedRecords == true else { return }
+                self.pointerInjector?.injectText(text)
+            }
+        }
 
         // Transport/Session callbacks fire on the network thread → hop onto lifeQ before touching
         // lifecycle state (so they serialize with connect/retry/teardown).
@@ -205,10 +221,6 @@ final class HostConnection: ConnectionEngine {
                 self.reconfigure(caps: caps, gen: gen)
             }
         }
-        session.onInput = { [weak self] data in
-            if let e = InputCodec.decode(data) { self?.currentInjector()?.inject(e) }   // injector read is locked
-        }
-        session.onText = { [weak self] t in self?.currentInjector()?.injectText(t) }
         session.onError = { [weak self] msg in
             guard let self else { return }
             self.lifeQ.async {
@@ -233,6 +245,11 @@ final class HostConnection: ConnectionEngine {
                     self.running = false
                     self.teardownSession()
                     self.stateSubject.send(.blocked(.alreadyConnectedElsewhere))
+                    return
+                }
+                if msg.contains("auth_failed") || msg.contains("auth_required")
+                    || msg.contains("SC-RECORD-v1") {
+                    self.failClosedSecurity("secure session rejected: \(msg)")
                     return
                 }
                 // Repeated connect-timeouts mean the route never reaches the tablet — classically a
@@ -297,13 +314,24 @@ final class HostConnection: ConnectionEngine {
         }
     }
 
+    /// MUST run on lifeQ. Security failures never downgrade to legacy framing or retry forever.
+    private func failClosedSecurity(_ message: String) {
+        diag(message)
+        generation += 1
+        running = false
+        teardownSession()
+        stateSubject.send(.failed(.authFailed))
+    }
+
     /// MUST run on lifeQ. Nils the refs synchronously; stops the producer/transport off-queue so the
     /// serial lifecycle never blocks on the 2s VTCompressionSession invalidate.
     private func teardownSession() {
+        pointerInjector?.release()
+        pointerInjector = nil
         handshakeDone = false   // disarm the heartbeat until the next handshake completes
         frameLock.lock(); let prod = producer; producer = nil; frameLock.unlock()
         let t = transport; transport = nil
-        session = nil; virtualDisplay = nil; setInjector(nil)
+        session = nil; virtualDisplay = nil
         DispatchQueue.global().async {
             if let prod {
                 let sem = DispatchSemaphore(value: 0)
@@ -316,28 +344,33 @@ final class HostConnection: ConnectionEngine {
 
     // MARK: - Pipeline (built on connect, rebuilt on caps_update)
 
-    /// Build the full pipeline on connect: a virtual display matching the panel, an injector bound
-    /// to it, and the producer.
+    /// Build capture and consent-gated input only after authenticated records are active.
     private func buildPipeline(caps: [String: Any]?, gen: Int) {
-        guard running, gen == generation else { return }
-        var cfg = displayConfig(from: caps)
-        cfg.hdr = hdrEnabled(from: caps)   // HDR reference display → macOS keeps EDR headroom
+        guard running, gen == generation, session?.hasAuthenticatedRecords == true else {
+            if running, gen == generation {
+                failClosedSecurity("records were not active before media pipeline start")
+            }
+            return
+        }
+        var cfg = HostMediaConfiguration.displayConfig(from: caps)
+        cfg.hdr = HostMediaConfiguration.hdrEnabled(from: caps)   // HDR reference display → macOS keeps EDR headroom
         cfg.serial = DisplaySerial.allocate()   // process-globally unique identity ⇒ always extends, never restores a mirror, never collides across simultaneous connections (#51/#58)
         let vd = VirtualDisplay(cfg)
         self.virtualDisplay = vd
-        self.setInjector(InputInjector(displayID: vd.displayID))
+        pointerInjector = FOSSPointerInjector(displayID: vd.displayID)
         diag("buildPipeline \(cfg.pointWidth)x\(cfg.pointHeight) serial=\(cfg.serial) id=\(vd.displayID)")
         buildProducer(vd: vd, caps: caps, gen: gen)
     }
 
     /// Create + start the capture→encode→stream producer for an existing virtual display (sends
-    /// video_config + a keyframe). Reused on connect and on rotation, where the display + injector
-    /// are kept and only the producer is rebuilt at the new size.
+    /// video_config + a keyframe). Reused on connect and on rotation, where the display is kept and
+    /// only the producer is rebuilt at the new size.
     private func buildProducer(vd: VirtualDisplay, caps: [String: Any]?, gen: Int) {
         guard running, gen == generation, let session = self.session, let transport = self.transport else { return }
-        let negCodec = codec(from: caps)
-        let negHdr = hdrEnabled(from: caps)
-        let negFps = Int(displayConfig(from: caps).refreshRate)
+        let videoWriter = ReliableVideoFrameWriter(session: session, transport: transport)
+        let negCodec = HostMediaConfiguration.codec(from: caps)
+        let negHdr = HostMediaConfiguration.hdrEnabled(from: caps)
+        let negFps = Int(HostMediaConfiguration.displayConfig(from: caps).refreshRate)
         let mi = vd.modeInfo()
         self.tele.resolution = "\(mi.pointW)×\(mi.pointH)"
         self.tele.codec = negCodec.rawValue.uppercased() + (negHdr ? " · HDR10" : "")
@@ -348,6 +381,21 @@ final class HostConnection: ConnectionEngine {
         prod.onResolution = { [weak session] w, h in
             session?.sendVideoConfig(width: w, height: h, codec: negCodec.rawValue, hdr: negHdr ? "pq" : "off")
         }
+        prod.onError = { [weak self, weak prod] message in
+            guard let self, let prod else { return }
+            self.lifeQ.async {
+                guard self.running, gen == self.generation else { return }
+                self.frameLock.lock()
+                let isCurrent = self.producer === prod
+                self.frameLock.unlock()
+                guard isCurrent else { return }
+                self.diag("producer failed: \(message)")
+                self.generation += 1
+                self.running = false
+                self.teardownSession()
+                self.stateSubject.send(.failed(.videoUnavailable))
+            }
+        }
         prod.onEncoded = { [weak self, weak prod] data, isKeyframe in
             guard let self, let prod else { return }
             // Drop frames from a STALE producer. teardown/reconfigure stop the old producer
@@ -356,13 +404,24 @@ final class HostConnection: ConnectionEngine {
             self.frameLock.lock()
             let isCurrent = (self.producer === prod)
             if isCurrent { self.frames += 1; self.bytes += data.count }
+            let isFirst = isCurrent && self.frames == 1
             self.frameLock.unlock()
             guard isCurrent else { return }
-            transport.send(FrameCodec.encode(channel: .video, flags: isKeyframe ? .keyframe : [], payload: data))
+            guard videoWriter.sendVideo(data, isKeyframe: isKeyframe) else {
+                self.lifeQ.async {
+                    guard self.running, gen == self.generation else { return }
+                    self.failClosedSecurity("authenticated VIDEO seal failed")
+                }
+                return
+            }
+            if isFirst { self.diag("first VIDEO sent bytes=\(data.count) keyframe=\(isKeyframe)") }
             if self.stateSubject.value != .connected { self.stateSubject.send(.connected) }
         }
         frameLock.lock(); self.producer = prod; frameLock.unlock()   // under lock so onEncoded's ===prod check is race-free
-        Task { try? await prod.start() }
+        Task {
+            do { try await prod.start() }
+            catch { prod.onError?("capture start failed: \(error.localizedDescription)") }
+        }
     }
 
     /// MUST run on lifeQ. Follow tablet rotation by recreating the virtual display at the new
@@ -371,13 +430,13 @@ final class HostConnection: ConnectionEngine {
         guard running, gen == generation, let vd = virtualDisplay else {
             diag("reconfigure skipped (running=\(running) gen=\(gen)/\(generation) hasVD=\(virtualDisplay != nil))"); return
         }
-        let newCfg = displayConfig(from: caps)
+        let newCfg = HostMediaConfiguration.displayConfig(from: caps)
         let mi = vd.modeInfo()
         diag("reconfigure new=\(newCfg.pointWidth)x\(newCfg.pointHeight) cur=\(mi.pointW)x\(mi.pointH)")
         if mi.pointW == newCfg.pointWidth && mi.pointH == newCfg.pointHeight { diag("reconfigure no-change"); return }
         stateSubject.send(.connecting)
         frameLock.lock(); let prod = producer; producer = nil; frameLock.unlock()
-        let oldVD = virtualDisplay; virtualDisplay = nil; setInjector(nil)
+        let oldVD = virtualDisplay; virtualDisplay = nil
         // Heavy stop + CG settle OFF the serial queue, in order (stop capture → hold old display →
         // settle), THEN hop back onto lifeQ to rebuild — so the rebuild never races other lifecycle
         // steps and the new display is only created after the old one is fully gone.
@@ -391,28 +450,12 @@ final class HostConnection: ConnectionEngine {
             Thread.sleep(forTimeInterval: 0.4)     // let CoreGraphics settle before recreating
             self?.lifeQ.async {
                 guard let self, self.running, gen == self.generation else { return }
-                self.buildPipeline(caps: caps, gen: gen)   // fresh display + injector + producer at the new orientation
+                self.buildPipeline(caps: caps, gen: gen)   // fresh display + producer at the new orientation
             }
         }
     }
 
-    /// Append a diagnostic line to /tmp/sc-mac-diag.log (NSLog isn't captured for this app).
-    /// Self-bounding: resets the file once it passes ~256 KB so it can never eat disk; /tmp is also
-    /// cleared by macOS on reboot.
-    private func diag(_ s: String) {
-        let path = "/tmp/sc-mac-diag.log"
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-           let size = attrs[.size] as? Int, size > 256 * 1024 {
-            try? FileManager.default.removeItem(atPath: path)
-        }
-        let line = s + "\n"
-        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-        if let h = FileHandle(forWritingAtPath: path) {
-            h.seekToEndOfFile()
-            if let d = line.data(using: .utf8) { h.write(d) }
-            try? h.close()
-        }
-    }
+    private func diag(_ message: String) { HostConnectionDiagnostics.write(message) }
 
     // MARK: - Telemetry
 
@@ -441,45 +484,4 @@ final class HostConnection: ConnectionEngine {
         fpsTimer = t
     }
 
-    // MARK: - Caps → config
-
-    /// Build a virtual display matching ANY tablet's panel from its reported caps. Adapts to
-    /// arbitrary resolution + refresh; clamps the long edge to an encoder-safe size (preserving
-    /// aspect) and forces even pixels so the H.264/HEVC encoder is happy on any device.
-    private func displayConfig(from caps: [String: Any]?) -> VirtualDisplayConfig {
-        guard let caps,
-              let rawW = (caps["screenWidth"] as? NSNumber)?.intValue,
-              let rawH = (caps["screenHeight"] as? NSNumber)?.intValue,
-              rawW >= 640, rawH >= 400 else { return VirtualDisplayConfig() }
-        let scale = 2
-        var pw = rawW, ph = rawH
-        // Cap the long edge (codec level limits) preserving aspect — a no-op for current tablets.
-        let maxEdge = 4096
-        if max(pw, ph) > maxEdge {
-            let f = Double(maxEdge) / Double(max(pw, ph))
-            pw = Int((Double(pw) * f).rounded()); ph = Int((Double(ph) * f).rounded())
-        }
-        // Backing pixels divisible by 2×scale ⇒ whole point dims and even pixels (encoder-safe).
-        let step = 2 * scale
-        pw -= pw % step; ph -= ph % step
-        let reported = (caps["refreshRate"] as? NSNumber)?.doubleValue ?? 60
-        let refresh = max(30, min(Double(maxFps), reported))
-        return VirtualDisplayConfig(pointWidth: pw / scale, pointHeight: ph / scale, scale: scale, refreshRate: refresh)
-    }
-
-    private func codec(from caps: [String: Any]?) -> VideoCodec {
-        // Compatibility escape hatch (AppViewModel's 编码 toggle): force H.264 even if the tablet offers
-        // HEVC, for devices whose HEVC decoder misbehaves. Read here so it applies at session build.
-        if UserDefaults.standard.bool(forKey: "sc.forceH264") { return .h264 }
-        if let arr = caps?["codecs"] as? [Any], arr.compactMap({ $0 as? String }).contains("hevc") { return .hevc }
-        return .h264
-    }
-
-    /// HDR10/PQ negotiation. GATED OFF (2026-05-31): a private CGVirtualDisplay cannot report
-    /// EDR>1.0, so macOS tone-maps HDR→SDR before capture (no real benefit). The HDR transport
-    /// is intact — flip this back on when the source can be HDR (e.g. a DriverKit HDR display).
-    private func hdrEnabled(from caps: [String: Any]?) -> Bool {
-        _ = caps
-        return false
-    }
 }

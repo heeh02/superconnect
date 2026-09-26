@@ -1,6 +1,5 @@
-// Pure Kotlin/JVM library: the wire protocol (FrameCodec, InputCodec, …). NO Android dependencies, so
-// it is conformance-tested off-device against ../../proto/vectors.json and reused by the Android :app
-// (and, on the private branch, by paid modules). `org.json` is a TEST dep only (to read the vectors).
+// Kotlin/JVM projection used by the ViewOnly Receiver. JNI remains the canonical frame/video/auth
+// authority; no Kotlin INPUT codec is compiled in this composition.
 plugins {
     id("org.jetbrains.kotlin.jvm")
 }
@@ -11,5 +10,13 @@ dependencies {
 }
 
 kotlin {
-    jvmToolchain(17)
+    // Use the invoking JDK (CI 17 or Android Studio JBR 21) while emitting Java 17 bytecode.
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }

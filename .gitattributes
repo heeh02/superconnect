@@ -1,0 +1,36 @@
+* text=auto
+
+*.sh text eol=lf
+*.zsh text eol=lf
+*.py text eol=lf
+*.rb text eol=lf
+*.rs text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.c text eol=lf
+*.cpp text eol=lf
+*.swift text eol=lf
+*.kt text eol=lf
+*.kts text eol=lf
+*.ets text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.plist text eol=lf
+*.xml text eol=lf
+*.pbxproj text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+*.png binary
+*.icns binary
+*.jar binary
+*.zip binary
+*.apk binary
+*.hap binary
+*.ipa binary
+*.msix binary
+
+# Preserve upstream license texts byte-for-byte, including their original whitespace.
+third_party/rust/licenses/** -text whitespace=-trailing-space,-blank-at-eof

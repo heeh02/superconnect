@@ -85,53 +85,10 @@ public enum InputCodec {
     public static let recordSize = 44
 
     public static func encode(_ e: InputEvent) -> Data {
-        var w = ByteWriter()
-        w.u8(e.type); w.u8(e.tool); w.u8(e.buttons); w.u8(e.flags)
-        w.u64(e.timestampMs)
-        w.f32(e.x); w.f32(e.y); w.f32(e.pressure)
-        w.f32(e.tiltX); w.f32(e.tiltY)
-        w.f32(e.scrollX); w.f32(e.scrollY)
-        w.u16(e.keyCode); w.u16(e.pointerId)
-        return w.data
+        RustWireRuntime.encodeInput(e)
     }
 
     public static func decode(_ data: Data) -> InputEvent? {
-        guard data.count >= recordSize else { return nil }
-        var r = ByteReader(data)
-        return InputEvent(
-            type: r.u8(), tool: r.u8(), buttons: r.u8(), flags: r.u8(),
-            timestampMs: r.u64(),
-            x: r.f32(), y: r.f32(), pressure: r.f32(),
-            tiltX: r.f32(), tiltY: r.f32(),
-            scrollX: r.f32(), scrollY: r.f32(),
-            keyCode: r.u16(), pointerId: r.u16())
+        RustWireRuntime.decodeInput(data)
     }
-}
-
-// MARK: - Little-endian byte helpers
-
-private struct ByteWriter {
-    var data = Data()
-    mutating func u8(_ v: UInt8) { data.append(v) }
-    mutating func u16(_ v: UInt16) { for i in 0..<2 { data.append(UInt8((v >> (8 * UInt16(i))) & 0xff)) } }
-    mutating func u64(_ v: UInt64) { for i in 0..<8 { data.append(UInt8((v >> (8 * UInt64(i))) & 0xff)) } }
-    mutating func f32(_ v: Float) { u32(v.bitPattern) }
-    mutating func u32(_ v: UInt32) { for i in 0..<4 { data.append(UInt8((v >> (8 * UInt32(i))) & 0xff)) } }
-}
-
-private struct ByteReader {
-    let bytes: [UInt8]
-    var i = 0
-    init(_ data: Data) { bytes = [UInt8](data) }
-    mutating func u8() -> UInt8 { defer { i += 1 }; return bytes[i] }
-    mutating func u16() -> UInt16 { UInt16(u8()) | (UInt16(u8()) << 8) }
-    mutating func u32() -> UInt32 {
-        UInt32(u8()) | (UInt32(u8()) << 8) | (UInt32(u8()) << 16) | (UInt32(u8()) << 24)
-    }
-    mutating func u64() -> UInt64 {
-        var v: UInt64 = 0
-        for s in stride(from: 0, through: 56, by: 8) { v |= UInt64(u8()) << UInt64(s) }
-        return v
-    }
-    mutating func f32() -> Float { Float(bitPattern: u32()) }
 }

@@ -1,10 +1,13 @@
-# Release signing (Android receiver)
+# Release signing boundary (FOSS Android receiver)
 
-The release APK is signed with a **stable keystore** so it installs cleanly on any device, updates in
-place, and is distributable. This is the Android analogue of the Mac app's stable self‑signed cert.
+The separate package is `com.superconnect.receiver.foss`. The explicitly labelled v0.2.1
+open-source prerelease may ship an Android Debug-signed APK. This exception is not a stable release
+signing policy; later stable releases need an authorized, recoverable signer.
 
-> The debug keystore (`~/.android/debug.keystore`) is **per‑machine** — rebuilding elsewhere yields a
-> different signature, so users can't update in place. Never ship debug‑signed.
+> The debug keystore (`~/.android/debug.keystore`) is **per-machine**. The v0.2.1 prerelease must
+> publish the exact APK certificate SHA-256. A later APK signed with a different key cannot update
+> that installation in place; uninstalling it can remove app-local pairing and data. Do not use
+> debug signing for Standard or a stable release.
 
 ## What's gitignored (never committed)
 - `android/release.keystore` — the signing key.
@@ -13,30 +16,32 @@ place, and is distributable. This is the Android analogue of the Mac app's stabl
 Both are listed in `android/.gitignore`. **Back up the keystore securely** — if you lose it you can no
 longer publish updates that existing installs will accept.
 
-## Bootstrap (once)
-```bash
-cd android
-keytool -genkeypair -v -keystore release.keystore -alias superconnect \
-  -keyalg RSA -keysize 2048 -validity 10000 \
-  -storepass '<your-store-pass>' -keypass '<your-key-pass>' \
-  -dname "CN=Superconnect, O=Superconnect, C=CN"
+## Future stable signer
 
-cat > keystore.properties <<EOF
-storeFile=release.keystore
-storePassword=<your-store-pass>
-keyAlias=superconnect
-keyPassword=<your-key-pass>
-EOF
+The authorized release owner must create and back up a stable keystore outside Git, use hidden
+interactive password input or an approved secret manager, and verify the public certificate
+fingerprint before packaging. Never put passwords in shell command arguments, heredocs, scripts,
+logs, or committed files. The v0.2.1 debug-signed preview does not require this step.
+
+`app/build.gradle.kts` reads `keystore.properties` automatically. Debug builds do not require release
+credentials. Release builds fail before packaging when the properties file, any required field, or the
+configured keystore is missing; they never fall back to the debug signature.
+
+The focused boundary check does not read signing secrets:
+```bash
+bash check-release-signing.sh
 ```
 
-`app/build.gradle.kts` reads `keystore.properties` automatically: when present, `release` builds are
-signed with it; when **absent** (fresh clone / CI without the secret), release falls back to the debug
-signature so the project still builds.
+With Gradle/JDK/Android SDK available, a fresh checkout can also exercise the expected negative path:
+```bash
+gradle --no-daemon :app:validateReleaseSigning
+# expected without local release credentials: release_signing_properties_missing
+```
 
-## Build a distributable APK
+## Build a future stable-release APK
 ```bash
 ./gradlew :app:assembleRelease     # or: gradle :app:assembleRelease
-# → app/build/outputs/apk/release/app-release.apk  (universal, signed, installable on Android 7+)
+# → app/build/outputs/apk/release/app-release.apk  (arm64-v8a, only after release authorization)
 ```
 
 Bump `versionCode` (and `versionName`) in `app/build.gradle.kts` for each release so in‑place updates work.

@@ -1,7 +1,5 @@
-// Android app module — the generic Android RECEIVER (free: 1 pad ↔ 1 mac, wired via adb + wireless).
-// Depends on the pure-Kotlin :protocol module. Pure Kotlin, NO native libs → one universal APK runs on
-// every ABI (arm/arm64/x86), minSdk 24. Release builds are signed with a STABLE keystore (see below) so
-// the APK is properly installable, updatable in place, and distributable to arbitrary Android devices.
+// FOSS-P1 Android Receiver: ViewOnly UI + canonical Rust Auth/Record via :core-wire.
+// The local trial is arm64-only and has a package identity separate from old free/Standard/root apps.
 import java.util.Properties
 
 plugins {
@@ -10,43 +8,53 @@ plugins {
 }
 
 // Release signing is driven by a gitignored `android/keystore.properties` (storeFile/storePassword/
-// keyAlias/keyPassword). When it's absent (e.g. a fresh clone / CI without the secret), release builds
-// fall back to the debug signature so the project still builds — see android/sign-release.md.
+// keyAlias/keyPassword). Debug builds do not need it. Release builds fail closed when the file,
+// a required field, or the configured keystore is missing — see android/sign-release.md.
 val keystorePropsFile = rootProject.file("keystore.properties")
 val keystoreProps = Properties().apply {
-    if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
+    if (keystorePropsFile.isFile) keystorePropsFile.inputStream().use { load(it) }
 }
-val hasReleaseKey = keystorePropsFile.exists()
+val requiredReleaseSigningProperties = listOf(
+    "storeFile",
+    "storePassword",
+    "keyAlias",
+    "keyPassword",
+)
+val configuredStorePath = keystoreProps.getProperty("storeFile")?.takeIf { it.isNotBlank() }
+// Keep the release variant bound to a non-debug signing config even before validation runs. The
+// nonexistent sentinel makes AGP fail too if a caller somehow bypasses validateReleaseSigning.
+val configuredStoreFile = configuredStorePath?.let(rootProject::file)
+    ?: rootProject.file(".release-signing-not-configured")
 
 android {
     namespace = "com.superconnect.receiver"
     compileSdk = 35
+    buildToolsVersion = "35.0.0"
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        applicationId = "com.superconnect.receiver"
-        minSdk = 24          // Android 7 — broad coverage incl. older Huawei Android tablets
+        applicationId = "com.superconnect.receiver.foss"
+        minSdk = 24
         targetSdk = 35
-        // Free-edition release version — kept in lockstep with mac (Info.plist) + harmony (app.json5).
-        versionCode = 2
-        versionName = "0.2.0"
+        // Separate package: code 3 mirrors the v0.2.1 release sequence without claiming an
+        // in-place upgrade from the old com.superconnect.receiver/code 2 artifact.
+        versionCode = 3
+        versionName = "0.2.1"
     }
 
     signingConfigs {
-        if (hasReleaseKey) {
-            create("release") {
-                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
-                storePassword = keystoreProps.getProperty("storePassword")
-                keyAlias = keystoreProps.getProperty("keyAlias")
-                keyPassword = keystoreProps.getProperty("keyPassword")
-            }
+        create("release") {
+            storeFile = configuredStoreFile
+            storePassword = keystoreProps.getProperty("storePassword") ?: ""
+            keyAlias = keystoreProps.getProperty("keyAlias") ?: ""
+            keyPassword = keystoreProps.getProperty("keyPassword") ?: ""
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false   // no R8: the receiver leans on reflection-free Kotlin; keep it simple
-            signingConfig = if (hasReleaseKey) signingConfigs.getByName("release")
-                            else signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -61,4 +69,35 @@ android {
 
 dependencies {
     implementation(project(":protocol"))
+    implementation(project(":core-wire"))
+    testImplementation("junit:junit:4.13.2")
+}
+
+val validateReleaseSigning = tasks.register("validateReleaseSigning") {
+    group = "verification"
+    description = "Fails unless Android release signing inputs are complete."
+    if (keystorePropsFile.isFile) inputs.file(keystorePropsFile)
+    outputs.upToDateWhen { false }
+    doLast {
+        if (!keystorePropsFile.isFile) {
+            throw GradleException("release_signing_properties_missing")
+        }
+        val missing = requiredReleaseSigningProperties.filter { key ->
+            keystoreProps.getProperty(key).isNullOrBlank()
+        }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "release_signing_properties_incomplete: missing ${missing.joinToString(",")}",
+            )
+        }
+        if (!rootProject.file(checkNotNull(configuredStorePath)).isFile) {
+            throw GradleException("release_signing_keystore_missing")
+        }
+    }
+}
+
+// Every release APK graph passes through a flavor-specific pre*ReleaseBuild task; debug tasks remain
+// independent if a future FOSS flavor is added.
+tasks.matching { it.name.startsWith("pre") && it.name.endsWith("ReleaseBuild") }.configureEach {
+    dependsOn(validateReleaseSigning)
 }

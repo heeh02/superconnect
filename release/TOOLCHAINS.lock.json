@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 1,
+  "authority": "release/TOOLCHAINS.lock.json",
+  "aggregate": {
+    "reproducibility": "PARTIAL",
+    "releaseGateStatus": "NOT_EXECUTED",
+    "reason": "Rust and Gradle are content-pinned. Host Kotlin/JDK patch bytes plus Apple, Huawei and Microsoft SDK families remain externally provisioned and require clean-host evidence from the exact release SHA. GitHub-hosted execution is forbidden and is not part of the reproducibility claim."
+  },
+  "components": {
+    "rust": {
+      "status": "PINNED",
+      "version": "1.97.1",
+      "requiredComponents": [
+        "rustfmt",
+        "clippy",
+        "llvm-tools-preview"
+      ],
+      "llvmToolsVersion": "22.1.6-rust-1.97.1-stable",
+      "authority": "rust-toolchain.toml",
+      "verification": "tools/with-rust-toolchain.sh; tools/core_ffi_receipt.py and tools/core_ffi_archive_validator.py resolve llvm-nm only from the pinned Rust sysroot"
+    },
+    "ripgrep": {
+      "status": "PINNED",
+      "version": "14.1.1",
+      "releaseBaseUrl": "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1",
+      "assets": {
+        "aarch64-apple-darwin": {
+          "name": "ripgrep-14.1.1-aarch64-apple-darwin.tar.gz",
+          "archiveSha256": "24ad76777745fbff131c8fbc466742b011f925bfa4fffa2ded6def23b5b937be",
+          "binarySha256": "0e0cb83f5195f1f51bb8feef1fff5b0b171e82bd1db6bd35deee701a3e7102f8"
+        },
+        "x86_64-apple-darwin": {
+          "name": "ripgrep-14.1.1-x86_64-apple-darwin.tar.gz",
+          "archiveSha256": "fc87e78f7cb3fea12d69072e7ef3b21509754717b746368fd40d88963630e2b3",
+          "binarySha256": "923dcc25cab57d33f4e7dd0476d4b74a554401a38817e246a8d6101dcd51c50f"
+        }
+      },
+      "authority": "release/TOOLCHAINS.lock.json",
+      "installer": "tools/install-pinned-ripgrep.sh"
+    },
+    "jdk": {
+      "status": "REQUIRED",
+      "distribution": "temurin",
+      "majorVersion": 17,
+      "authority": ".github/workflows/ci.yml",
+      "verification": "Owned-machine execution records java -version and the installed JDK identity. The pinned setup-java reference is an inert historical recipe and is never executed.",
+      "localTrialObserved": {
+        "vendor": "Eclipse Adoptium",
+        "version": "17.0.20.1+1",
+        "architecture": "aarch64",
+        "archiveSha256": "196d13ba5f10414bef7f6a05a9b3f00edacb18ebacef2b99485db9e2ee18f0e8",
+        "source": "Adoptium API v3 and temurin17-binaries release checksum"
+      }
+    },
+    "gradle": {
+      "status": "PINNED",
+      "version": "8.9",
+      "distributionUrl": "https://services.gradle.org/distributions/gradle-8.9-bin.zip",
+      "distributionSha256": "d725d707bfabd4dfdc958c624003b3c80accc03f7037b5122c4b1d0ef15cecab",
+      "wrapperJarSha256": "498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17",
+      "dependencyVerification": {
+        "status": "GENERATED_FREE_GRAPH_REVIEW_REQUIRED",
+        "releaseGateStatus": "NOT_EXECUTED",
+        "path": "android/gradle/verification-metadata.xml",
+        "sha256": "b2f3dea272364b03b00c2d4bc50a2f8e6a3c68309cb2789a7e3c1a49c79957a4",
+        "algorithm": "sha256",
+        "bootstrap": "Generated with Temurin 17 from the actual free-only :protocol:testClasses and :app:compileDebugKotlin graph; independent upstream checksum or signature review remains required before release admission"
+      },
+      "authority": "android/gradle/wrapper/gradle-wrapper.properties"
+    },
+    "androidSdk": {
+      "status": "REQUIRED",
+      "platformPackage": "platforms;android-35",
+      "buildToolsPackage": "build-tools;35.0.0",
+      "authority": "android/app/build.gradle.kts",
+      "verification": "sdkmanager package identity and Google repository metadata"
+    },
+    "androidNdk": {
+      "status": "REQUIRED",
+      "package": "ndk;27.2.12479018",
+      "authority": "android/core-wire/build.gradle.kts",
+      "verification": "sdkmanager package identity and Google repository metadata"
+    },
+    "androidCmake": {
+      "status": "REQUIRED",
+      "package": "cmake;3.22.1",
+      "authority": "android/core-wire/build.gradle.kts",
+      "verification": "sdkmanager package identity and Google repository metadata"
+    },
+    "androidStudioManualBuilder": {
+      "status": "EXTERNAL",
+      "version": null,
+      "requirement": "Android Studio bundled JBR used to launch the pinned Gradle graph from the debug-only android/build-apk.sh helper",
+      "releaseGateStatus": "NOT_EXECUTED",
+      "verification": "the manual compiler path is retired; the helper delegates to Gradle 8.9 with strict dependency verification and is not release evidence"
+    },
+    "kotlinCli": {
+      "status": "EXTERNAL",
+      "version": null,
+      "requirement": "kotlinc used by Android JVM host contract gates",
+      "releaseGateStatus": "NOT_EXECUTED",
+      "verification": "record and content-pin the Kotlin CLI distribution, or migrate every host fixture to the strictly verified Gradle compiler graph"
+    },
+    "xcode": {
+      "status": "EXTERNAL",
+      "version": null,
+      "requirement": "Xcode beta with the iPhoneOS 27.0 SDK and Apple signing/export tools",
+      "releaseGateStatus": "NOT_EXECUTED",
+      "verification": "record xcodebuild -version and SDK build identity in fixed-SHA release evidence"
+    },
+    "deveco": {
+      "status": "EXTERNAL",
+      "version": null,
+      "requirement": "DevEco Studio with a compatible OpenHarmony SDK, hvigor, Node and JBR",
+      "releaseGateStatus": "NOT_EXECUTED",
+      "verification": "record DevEco, SDK, hvigor, Node and JBR identities in fixed-SHA release evidence"
+    },
+    "msvc": {
+      "status": "EXTERNAL",
+      "version": null,
+      "requirement": "Visual Studio 17 2022 MSVC toolset and matching Windows SDK",
+      "releaseGateStatus": "NOT_EXECUTED",
+      "verification": "record cl.exe, link.exe, cmake generator and Windows SDK identities in fixed-SHA release evidence"
+    },
+    "githubActions": {
+      "status": "INERT_REFERENCE",
+      "execution": "FORBIDDEN",
+      "actions": {
+        "actions/checkout": "11d5960a326750d5838078e36cf38b85af677262",
+        "actions/setup-java": "cf277c60eb25467037889841efdb72551f06f6c3",
+        "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+        "gradle/actions/setup-gradle": "748248ddd2a24f49513d8f472f81c3a07d4d50e1"
+      },
+      "authority": ".github/workflows/ci.yml",
+      "verification": "The retained action references are commit-pinned source fixtures only; the workflow has on: [] and repository Actions must remain disabled."
+    },
+    "githubRunnerImages": {
+      "status": "RETIRED_REFERENCE",
+      "execution": "FORBIDDEN",
+      "version": null,
+      "labels": [
+        "macos-15",
+        "ubuntu-24.04",
+        "windows-2022"
+      ],
+      "imageContent": "MUTABLE",
+      "releaseGateStatus": "NOT_APPLICABLE",
+      "verification": "Labels remain only to parse the inert historical job recipe. No GitHub-hosted runner result is accepted as Superconnect release evidence."
+    },
+    "harmonyHdcMacX8664": {
+      "status": "PINNED",
+      "archiveSha256": "548db2c51667f8f81343edb0c830fd87a0b08e74d71a4b4baae83fef5243079b",
+      "binarySha256": "72f33401ba8576c4c591d03394c98aa78c60511a15b5e3e6f22b3e59ada3b9ef",
+      "authority": "tools/fetch-hdc-macos-x86_64.sh"
+    }
+  },
+  "entrypoints": [
+    ".github/workflows/ci.yml",
+    "android/build-apk.sh",
+    "harmony/build-app-store.sh",
+    "tools/build-harmony-release.py",
+    "ipados/build-app-store.sh",
+    "ipados/build-wave-email-gui-tests.sh",
+    "ipados/build-core-archives.sh",
+    "mac/build-app.sh",
+    "mac/build-notarized-companion.sh",
+    "mac/build-standard-app.sh",
+    "mac/build-vivo-root-app.sh",
+    "tools/build-android-wire-host.sh",
+    "tools/build-commercial-ffi.sh",
+    "tools/build-commercial-runtime-sdk.sh",
+    "tools/build-core-ffi.sh",
+    "tools/build-mac-commercial-ffi.sh",
+    "tools/build-mac-core-ffi.sh",
+    "tools/core_ffi_receipt.py",
+    "tools/gate-platform-products.sh",
+    "tools/gates/run",
+    "tools/gates/gate_local_environment.py",
+    "tools/gates/run-android-integration.sh",
+    "tools/gates/run-harmony-hap.sh",
+    "tools/gates/run-local-governance-tests.sh",
+    "tools/gates/runner.py",
+    "tools/package-release-app.sh",
+    "tools/windows_release_receipt.py",
+    "windows/CMakeLists.txt",
+    "windows/build-store-msix.ps1"
+  ]
+}

@@ -1,13 +1,21 @@
 #!/bin/zsh
-# Build the FREE Mac host as a SEPARATE app — "superconnect_free" — with its own bundle id + Desktop
-# path, so it NEVER collides with the mainline Superconnect.app (which is developed in parallel for
-# paid features). This is the free/open-core host: HarmonyOS (hdc) + Android (adb) wired + wireless,
-# no paid features. Built from the `dev` branch. Output: ~/Desktop/superconnect_free.app
-#
-# One-time on first launch: grant Screen Recording + Accessibility to "superconnect_free" in System
-# Settings (it's a distinct bundle id, so it has its own grants — separate from the mainline app).
-cd "$(dirname "$0")"
-SC_APP_NAME="superconnect_free" \
-SC_BUNDLE_ID="com.superconnect.free" \
-SC_APP_PATH="$HOME/Desktop/superconnect_free.app" \
-  ./build-app.sh "$@"
+# Local FOSS-P1 compilation only. This creates no .app bundle, signature, notarization or release
+# artifact; formal distribution remains a separate guarded workflow.
+set -euo pipefail
+
+HERE="${0:A:h}"
+REPOSITORY_ROOT="${HERE:h}"
+case "$(uname -m)" in
+  arm64) CORE_TARGET=aarch64-apple-darwin ;;
+  x86_64) CORE_TARGET=x86_64-apple-darwin ;;
+  *) print -u2 -- "unsupported Mac architecture"; exit 65 ;;
+esac
+CORE_LIBRARY_PATH="${SC_MAC_CORE_FFI_LIBRARY_PATH:-$REPOSITORY_ROOT/.build/core-ffi/$CORE_TARGET/dev-ffi}"
+[[ -f "$CORE_LIBRARY_PATH/libsuperconnect_core.a" ]] || {
+  print -u2 -- "missing canonical Core archive: $CORE_LIBRARY_PATH/libsuperconnect_core.a"
+  exit 1
+}
+
+cd "$HERE"
+exec env SC_MAC_CORE_FFI_LIBRARY_PATH="$CORE_LIBRARY_PATH" \
+  swift build --product superconnect-app-foss-preview "$@"

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "targets": [
+    {
+      "triple": "aarch64-apple-darwin",
+      "clangTarget": "aarch64-apple-darwin",
+      "surface": "apple-lp64",
+      "preprocessorCondition": "defined(__APPLE__) && defined(__MACH__) && defined(__aarch64__) && defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__)"
+    },
+    {
+      "triple": "x86_64-apple-darwin",
+      "clangTarget": "x86_64-apple-darwin",
+      "surface": "apple-lp64",
+      "preprocessorCondition": "defined(__APPLE__) && defined(__MACH__) && defined(__x86_64__) && defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__)"
+    },
+    {
+      "triple": "aarch64-linux-android",
+      "clangTarget": "aarch64-linux-android",
+      "surface": "unix-lp64",
+      "preprocessorCondition": "defined(__ANDROID__) && defined(__aarch64__)"
+    }
+  ],
+  "variants": {
+    "full": {
+      "excludedSymbols": []
+    },
+    "minimal": {
+      "excludedSymbols": []
+    }
+  }
+}

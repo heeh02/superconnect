@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SuperconnectProducer
 
 /// THE single seam between the SwiftUI views and the service layer. Exposes only what the
 /// UI needs — the device list, the current selection, per-device de-jargoned `ConnectionState`,
@@ -15,6 +16,15 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var telemetryByID: [String: SessionTelemetry] = [:]
     @Published private(set) var screenRecordingOK: Bool = false
     @Published private(set) var accessibilityOK: Bool = false
+    @Published var pointerControlEnabled = UserDefaults.standard.bool(forKey: FOSSPointerInjector.enabledKey) {
+        didSet {
+            UserDefaults.standard.set(pointerControlEnabled, forKey: FOSSPointerInjector.enabledKey)
+            if pointerControlEnabled && !accessibilityOK {
+                FOSSPointerInjector.requestPermission()
+                startPermissionPolling()
+            }
+        }
+    }
 
     /// Advisory soft cap: at/above this many simultaneous links the detail view warns about
     /// performance, but connecting is never blocked (a perf-limited Mac runs N encode pipelines — #51).
@@ -49,6 +59,9 @@ final class AppViewModel: ObservableObject {
     private let manualDiscovery: ManualDiscovery
     private var bag = Set<AnyCancellable>()
     private var permTimer: Timer?
+#if SC_FOSS_PREVIEW
+    private var fossAutoConnectAttempted = Set<String>()
+#endif
 
     init(store: DeviceStore, coordinator: ConnectionCoordinator, manual: ManualDiscovery) {
         self.store = store
@@ -89,29 +102,21 @@ final class AppViewModel: ObservableObject {
     }
 
     /// Poll permissions every 2s so the GUI flips after the user grants in System Settings;
-    /// stops itself once both are granted (re-armed by requestPermissions).
+    /// stops itself once Screen Recording is granted (re-armed by requestPermissions).
     private func startPermissionPolling() {
         guard permTimer == nil else { return }
         permTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshPermissions() }
     }
 
     func refreshPermissions() {
-        let s = SystemPermissions.hostStatus()
-        if screenRecordingOK != s.screenRecording { screenRecordingOK = s.screenRecording }
-        if accessibilityOK != s.accessibility { accessibilityOK = s.accessibility }
-        if screenRecordingOK && accessibilityOK { permTimer?.invalidate(); permTimer = nil }
+        let granted = SystemPermissions.hostStatus()
+        if screenRecordingOK != granted { screenRecordingOK = granted }
+        accessibilityOK = FOSSPointerInjector.hasPermission()
+        if screenRecordingOK && (!pointerControlEnabled || accessibilityOK) { permTimer?.invalidate(); permTimer = nil }
     }
 
     func requestPermissions() {
         SystemPermissions.requestHost()
-        startPermissionPolling()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.refreshPermissions() }
-    }
-
-    /// Safety net for the rare "Accessibility shows authorized but input injection is inert" (stale TCC):
-    /// reset THIS app's grant + re-prompt so macOS re-evaluates the current binary, then re-poll status.
-    func regrantAccessibility() {
-        SystemPermissions.resetAccessibility()
         startPermissionPolling()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.refreshPermissions() }
     }
@@ -150,7 +155,11 @@ final class AppViewModel: ObservableObject {
         let t = text.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return }
         var host = t
+#if SC_FOSS_PREVIEW
+        var port: UInt16 = 18888
+#else
         var port: UInt16 = 8888
+#endif
         // Trailing ":port" → split it off (IPv4 only for the MVP; bare IPv6 isn't supported here).
         if let colon = t.lastIndex(of: ":"), let p = UInt16(t[t.index(after: colon)...]) {
             host = String(t[..<colon])
@@ -179,5 +188,21 @@ final class AppViewModel: ObservableObject {
         if let sel = selectedDeviceID, !present.contains(sel) {
             selectedDeviceID = devs.first?.id                   // selected one vanished → reselect
         }
+#if SC_FOSS_PREVIEW
+        // The free preview has one supported route: one wired tablet. Start it as soon as the
+        // device is discovered so a stale monitoring/selection surface cannot leave the receiver
+        // waiting forever. A failed attempt remains visible and can still be retried manually.
+        if let device = devs.first,
+           devs.count == 1,
+           !fossAutoConnectAttempted.contains(device.id),
+           !coordinator.connectedDeviceIDs.contains(device.id) {
+            fossAutoConnectAttempted.insert(device.id)
+            coordinator.connect(device, as: .host)
+            coordinator.applyBitrate(Int(bitrateMbps))
+        }
+        for id in fossAutoConnectAttempted where !present.contains(id) {
+            fossAutoConnectAttempted.remove(id)
+        }
+#endif
     }
 }

@@ -1,5 +1,11 @@
 # Superconnect — HarmonyOS (Pad) app
 
+> **v0.2.1 compatibility note:** this directory preserves the historical v0.2.0 native receiver
+> source. It has not adopted the v0.2.1 authenticated-record protocol and is not the receiver
+> shipped in this release. For this preview, install the Android APK inside 卓易通 and use the
+> matching v0.2.1 Mac source build. No native HarmonyOS HAP or AppGallery release is included.
+> The historical instructions below do not establish current compatibility or security acceptance.
+
 Tablet-side receiver: accepts the Mac's connection (tunnelled over USB by `hdc fport`),
 negotiates caps (`hello_ack`), decodes the incoming HEVC/H.264 stream on the hardware
 `OH_VideoDecoder` and renders it onto an `XComponent` surface, and sends touch / pen /
