@@ -136,6 +136,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
                     .showSoftInput(ime, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
             },
+            onFingerAsPenToggle = {
+                pointerInput.fingerAsPen = !pointerInput.fingerAsPen
+                pointerInput.fingerAsPen
+            },
+            onDrawingModeToggle = {
+                pointerInput.drawingMode = !pointerInput.drawingMode
+                pointerInput.drawingMode
+            },
         )
         surfaceView = presentation.surfaceView.also { it.holder.addCallback(this) }
         surfaceView.setOnTouchListener { _, event -> pointerInput.onTouch(event) }

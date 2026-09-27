@@ -9,4 +9,7 @@ internal object PointerInputNative {
     }
     external fun encode(type: Int, tool: Int, buttons: Int, timestamp: Long,
                         x: Float, y: Float, pressure: Float, tiltX: Float, tiltY: Float): ByteArray?
+    external fun encodeExtended(type: Int, tool: Int, buttons: Int, timestamp: Long,
+                                x: Float, y: Float, pressure: Float, tiltX: Float, tiltY: Float,
+                                scrollX: Float, scrollY: Float, pointerId: Int): ByteArray?
 }

@@ -1,4 +1,4 @@
-// FOSS-P1 Android Receiver: ViewOnly UI + canonical Rust Auth/Record via :core-wire.
+// FOSS-P1 Android Receiver: optional consented input + canonical Rust Auth/Record via :core-wire.
 // The local trial is arm64-only and has a package identity separate from old free/Standard/root apps.
 import java.util.Properties
 
@@ -36,10 +36,9 @@ android {
         applicationId = "com.superconnect.receiver.foss"
         minSdk = 24
         targetSdk = 35
-        // Separate package: code 3 mirrors the v0.2.1 release sequence without claiming an
-        // in-place upgrade from the old com.superconnect.receiver/code 2 artifact.
-        versionCode = 3
-        versionName = "0.2.1"
+        // Same FOSS package: the successor increments code for a signer-matched in-place update.
+        versionCode = 4
+        versionName = "0.2.2"
     }
 
     signingConfigs {

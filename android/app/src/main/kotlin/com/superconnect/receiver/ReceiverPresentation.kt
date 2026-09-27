@@ -22,6 +22,8 @@ internal class ReceiverPresentation(
     private val onWireless: () -> Unit,
     private val onPointerToggle: () -> Boolean,
     private val onKeyboard: () -> Unit,
+    private val onFingerAsPenToggle: () -> Boolean,
+    private val onDrawingModeToggle: () -> Boolean,
 ) {
     val root = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
@@ -63,6 +65,8 @@ internal class ReceiverPresentation(
     private var fullscreen = false
     private var displaying = false
     private val pointerButtons = mutableListOf<Button>()
+    private val fingerAsPenButtons = mutableListOf<Button>()
+    private val drawingModeButtons = mutableListOf<Button>()
 
     init {
         val brand = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
@@ -85,6 +89,8 @@ internal class ReceiverPresentation(
         edge.visibility = View.GONE
         tray.addView(button("退出全屏", false) { setFullscreen(false) })
         tray.addView(pointerButton())
+        tray.addView(fingerAsPenButton())
+        tray.addView(drawingModeButton())
         tray.addView(button("键盘", false, onKeyboard))
         tray.addView(button("断开", false, onExit))
         videoContainer.addView(tray, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.END).apply {
@@ -106,6 +112,8 @@ internal class ReceiverPresentation(
         sidebar.addView(display, column(MATCH, WRAP, 14))
         val future = card("触控、手写笔与键盘", "在 Mac 上允许平板控制，即可点击、书写与输入文字。")
         future.addView(pointerButton(), column(MATCH, dp(42), 12))
+        future.addView(fingerAsPenButton(), column(MATCH, dp(42), 8))
+        future.addView(drawingModeButton(), column(MATCH, dp(42), 8))
         future.addView(button("打开键盘", false, onKeyboard), column(MATCH, dp(42), 8))
         listOf("文件传输").forEach { name ->
             future.addView(button("🔒  $name   ·   后续解锁", false) { showLocked(name) },
@@ -201,6 +209,27 @@ internal class ReceiverPresentation(
             pointerButtons.forEach { it.text = text }
         }
         return button
+    }
+
+    private fun fingerAsPenButton(): Button {
+        val value = button("手指当笔 · 关闭", false) {}
+        fingerAsPenButtons += value
+        value.setOnClickListener {
+            val label = if (onFingerAsPenToggle()) "手指当笔 · 开启" else "手指当笔 · 关闭"
+            fingerAsPenButtons.forEach { it.text = label }
+        }
+        return value
+    }
+
+    private fun drawingModeButton(): Button {
+        val value = button("触控笔绘画模式 · 关闭", false) {}
+        drawingModeButtons += value
+        value.setOnClickListener {
+            val label = if (onDrawingModeToggle()) "触控笔绘画模式 · 开启"
+                else "触控笔绘画模式 · 关闭"
+            drawingModeButtons.forEach { it.text = label }
+        }
+        return value
     }
 
     private fun card(title: String, caption: String): LinearLayout = LinearLayout(activity).apply {

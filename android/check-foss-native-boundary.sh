@@ -16,10 +16,10 @@ fail() {
 
 grep -Fq 'applicationId = "com.superconnect.receiver.foss"' "$ANDROID_ROOT/app/build.gradle.kts" \
   || fail "FOSS package identity missing"
-grep -Fq 'versionCode = 3' "$ANDROID_ROOT/app/build.gradle.kts" \
-  || fail "v0.2.1 versionCode is not 3"
-grep -Fq 'versionName = "0.2.1"' "$ANDROID_ROOT/app/build.gradle.kts" \
-  || fail "v0.2.1 versionName missing"
+grep -Fq 'versionCode = 4' "$ANDROID_ROOT/app/build.gradle.kts" \
+  || fail "v0.2.2 versionCode is not 4"
+grep -Fq 'versionName = "0.2.2"' "$ANDROID_ROOT/app/build.gradle.kts" \
+  || fail "v0.2.2 versionName missing"
 grep -Fq 'implementation(project(":core-wire"))' "$ANDROID_ROOT/app/build.gradle.kts" \
   || fail "app does not consume receiver JNI module"
 grep -Fq -- '--dependency-verification=strict' "$ANDROID_ROOT/build-apk.sh" \
@@ -87,6 +87,12 @@ grep -Fq 'inputPolicyBits = IntentV2Bits.INPUT_REMOTE_CONTROL' "$APP/FossProduct
   || fail "explicit optional control product profile missing"
 grep -Fq 'sc_input_encode_v1' "$ANDROID_ROOT/core-wire/src/AndroidPointerJni.cpp" \
   || fail "input encoding must use Rust"
+grep -Fq 'PointerInputNative_encodeExtended' "$ANDROID_ROOT/core-wire/src/AndroidPointerJni.cpp" \
+  || fail "successor gesture records have no canonical JNI adapter"
+grep -Fq 'GestureController(::emitGesture)' "$APP/PointerInputController.kt" \
+  || fail "successor native touch does not use the reviewed gesture policy"
+[[ -f "$APP/GestureController.kt" ]] \
+  || fail "successor finger gesture policy missing"
 grep -Fq 'seal(Channel.INPUT.value, 0, payload)' "$APP/SessionInputWriter.kt" \
   || fail "input must use the authenticated record writer"
 grep -Fq 'generationFence::isActive' "$APP/MainActivity.kt" \
@@ -121,7 +127,7 @@ if grep -R -n -E --include='*.kt' \
 fi
 
 for removed in \
-  ControlPanel.kt FloatingBall.kt GestureController.kt \
+  ControlPanel.kt FloatingBall.kt \
   InputRouter.kt InputSender.kt PairingStore.kt; do
   [[ ! -e "$APP/$removed" ]] || fail "legacy input/TOFU source remains: $removed"
 done
