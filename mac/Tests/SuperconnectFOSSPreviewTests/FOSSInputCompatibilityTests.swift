@@ -1,4 +1,5 @@
 import XCTest
+import CoreGraphics
 import SuperconnectCore
 @testable import SuperconnectProducer
 
@@ -59,5 +60,28 @@ final class FOSSInputCompatibilityTests: XCTestCase {
         XCTAssertFalse(active)
         XCTAssertNil(FOSSGestureProjection.endZoom(active: &active))
         XCTAssertEqual(FOSSGestureProjection.zoomDelta(-.infinity), 0)
+    }
+
+    func testSecondaryPointerDownDragUpAndTerminalRelease() {
+        var pointer = FOSSPointerButtonProjection()
+        let down = pointer.action(type: .touchDown,
+                                  buttons: InputButtons.secondary.rawValue)
+        XCTAssertEqual(down, .down(.right))
+        XCTAssertEqual(down?.eventType, .rightMouseDown)
+        XCTAssertEqual(down?.mouseButton, .right)
+        XCTAssertEqual(pointer.action(type: .touchMove, buttons: 0), .dragged(.right))
+        let up = pointer.action(type: .touchUp, buttons: 0)
+        XCTAssertEqual(up, .up(.right))
+        XCTAssertEqual(up?.eventType, .rightMouseUp)
+        XCTAssertEqual(up?.mouseButton, .right)
+        XCTAssertNil(pointer.release())
+
+        XCTAssertEqual(pointer.action(type: .touchDown,
+                                      buttons: InputButtons.primary.rawValue), .down(.left))
+        let released = pointer.release() // disconnect or consent loss
+        XCTAssertEqual(released, .up(.left))
+        XCTAssertEqual(released?.eventType, .leftMouseUp)
+        XCTAssertNil(pointer.release())
+        XCTAssertEqual(pointer.action(type: .touchDown, buttons: 0), .moved)
     }
 }

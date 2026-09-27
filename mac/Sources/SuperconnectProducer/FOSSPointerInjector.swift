@@ -40,6 +40,64 @@ enum FOSSGestureProjection {
     }
 }
 
+enum FOSSPointerButton: Equatable {
+    case left
+    case right
+}
+
+enum FOSSPointerAction: Equatable {
+    case moved
+    case down(FOSSPointerButton)
+    case dragged(FOSSPointerButton)
+    case up(FOSSPointerButton)
+
+    var eventType: CGEventType {
+        switch self {
+        case .moved: .mouseMoved
+        case .down(.left): .leftMouseDown
+        case .down(.right): .rightMouseDown
+        case .dragged(.left): .leftMouseDragged
+        case .dragged(.right): .rightMouseDragged
+        case .up(.left): .leftMouseUp
+        case .up(.right): .rightMouseUp
+        }
+    }
+
+    var mouseButton: CGMouseButton {
+        switch self {
+        case .down(.right), .dragged(.right), .up(.right): .right
+        default: .left
+        }
+    }
+}
+
+struct FOSSPointerButtonProjection {
+    private(set) var held: FOSSPointerButton?
+
+    mutating func action(type: InputType, buttons: UInt8) -> FOSSPointerAction? {
+        switch type {
+        case .touchDown:
+            if (buttons & InputButtons.secondary.rawValue) != 0 { held = .right }
+            else if (buttons & InputButtons.primary.rawValue) != 0 { held = .left }
+            else { held = nil }
+            return held.map(FOSSPointerAction.down) ?? .moved
+        case .touchMove:
+            return held.map(FOSSPointerAction.dragged) ?? .moved
+        case .touchUp:
+            return release() ?? .moved
+        case .hover:
+            return .moved
+        default:
+            return nil
+        }
+    }
+
+    mutating func release() -> FOSSPointerAction? {
+        defer { held = nil }
+        return held.map(FOSSPointerAction.up)
+    }
+}
+
 /// Consent-gated native input effects. Wire decoding stays in Rust.
 public final class FOSSPointerInjector {
     public static let enabledKey = "sc.foss.allowPointerControl"
@@ -58,7 +116,9 @@ public final class FOSSPointerInjector {
     private lazy var keyboard = KeyboardInjector(source: source)
     private var heldKeys: [UInt16: InputEvent] = [:]
     private let lock = NSLock()
-    private var last: InputEvent?
+    private var lastPen: InputEvent?
+    private var finger = FOSSPointerButtonProjection()
+    private var lastFingerPoint: CGPoint = .zero
     private var zoomActive = false
     private var zoomPoint: CGPoint = .zero
     private var observer: NSObjectProtocol?
@@ -87,6 +147,7 @@ public final class FOSSPointerInjector {
         }
         if type == .scroll {
             finishZoomLocked()
+            releaseFingerLocked()
             postScroll(dx: event.scrollX, dy: event.scrollY)
             return
         }
@@ -102,15 +163,15 @@ public final class FOSSPointerInjector {
         }
         let point = position(event)
         if event.tool == InputTool.finger.rawValue {
-            let kind: CGEventType = switch type {
-                case .touchDown: .leftMouseDown
-                case .touchUp: .leftMouseUp
-                case .touchMove: last == nil ? .mouseMoved : .leftMouseDragged
-                default: .mouseMoved
+            if type == .touchDown { releaseFingerLocked() }
+            lastFingerPoint = point
+            if let action = finger.action(type: type, buttons: event.buttons) {
+                postFinger(action, at: point)
             }
-            post(kind, point)
-        } else { pen.inject(type, point, event) }
-        last = type == .touchUp || (type == .hover && event.tool == InputTool.finger.rawValue) ? nil : event
+            return
+        }
+        pen.inject(type, point, event)
+        lastPen = type == .touchUp ? nil : event
     }
 
     public func injectText(_ text: String) {
@@ -127,20 +188,29 @@ public final class FOSSPointerInjector {
         heldKeys.values.forEach { keyboard.injectKey(false, $0) }
         heldKeys.removeAll()
         finishZoomLocked()
-        guard var event = last else { return }
+        releaseFingerLocked()
+        guard var event = lastPen else { return }
         event.type = InputType.touchUp.rawValue; event.buttons = 0; event.pressure = 0
-        if event.tool == InputTool.finger.rawValue { post(.leftMouseUp, position(event)) }
-        else { pen.inject(.touchUp, position(event), event) }
-        last = nil
+        pen.inject(.touchUp, position(event), event)
+        lastPen = nil
     }
     private func position(_ event: InputEvent) -> CGPoint {
         let bounds = CGDisplayBounds(displayID)
         return CGPoint(x: bounds.minX + CGFloat(event.x) * bounds.width,
                        y: bounds.minY + CGFloat(event.y) * bounds.height)
     }
-    private func post(_ type: CGEventType, _ point: CGPoint) {
+    private func postFinger(_ action: FOSSPointerAction, at point: CGPoint) {
+        post(action.eventType, point, button: action.mouseButton)
+    }
+
+    private func releaseFingerLocked() {
+        if let action = finger.release() { postFinger(action, at: lastFingerPoint) }
+    }
+
+    private func post(_ type: CGEventType, _ point: CGPoint,
+                      button: CGMouseButton = .left) {
         let event = CGEvent(mouseEventSource: source, mouseType: type,
-                            mouseCursorPosition: point, mouseButton: .left)
+                            mouseCursorPosition: point, mouseButton: button)
         event?.setIntegerValueField(.mouseEventClickState, value: 1)
         event?.post(tap: .cghidEventTap)
     }
@@ -158,6 +228,7 @@ public final class FOSSPointerInjector {
         guard let phase = FOSSGestureProjection.zoomPhase(
             buttons: event.buttons, active: &zoomActive
         ) else { return }
+        if phase == 1 { releaseFingerLocked() }
         let anchored = event.x != 0 || event.y != 0
         let point = anchored ? position(event) : (CGEvent(source: nil)?.location ?? position(event))
         if phase == 1 && anchored { post(.mouseMoved, point) }
