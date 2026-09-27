@@ -267,8 +267,8 @@ final class FOSSPreviewSecurityPathTests: XCTestCase {
         XCTAssertEqual(FOSSPreviewProduct.appName, "Superconnect FOSS Preview")
         XCTAssertEqual(FOSSPreviewProduct.bundleIdentifier, "com.superconnect.foss.preview")
         XCTAssertEqual(FOSSPreviewProduct.executableName, "superconnect-app-foss-preview")
-        XCTAssertEqual(FOSSPreviewProduct.shortVersion, "0.2.1")
-        XCTAssertEqual(FOSSPreviewProduct.buildVersion, "3")
+        XCTAssertEqual(FOSSPreviewProduct.shortVersion, "0.2.2")
+        XCTAssertEqual(FOSSPreviewProduct.buildVersion, "5")
         XCTAssertEqual(
             FOSSPreviewProduct.keychainService,
             "com.superconnect.foss.preview.pairing.secret.v2"

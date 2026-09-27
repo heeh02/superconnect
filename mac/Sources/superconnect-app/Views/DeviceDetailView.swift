@@ -1,5 +1,20 @@
 import SwiftUI
 
+enum FOSSQualityPreset: Int, CaseIterable, Identifiable {
+    case smooth = 25
+    case balanced = 50
+    case extreme = 80
+
+    var id: Int { rawValue }
+    var title: String {
+        switch self {
+        case .smooth: "流畅 · 25 Mbps"
+        case .balanced: "均衡 · 50 Mbps"
+        case .extreme: "极致 · 80 Mbps"
+        }
+    }
+}
+
 /// The detail pane for the selected device: header + connect control + (when connected) live
 /// telemetry + a Screen Recording permission section +
 /// read-only negotiated info. Reuses ConnectionToggle / AdvancedPanel / StatusDot / TransportBadge.
@@ -26,6 +41,14 @@ struct DeviceDetailView: View {
                             Spacer()
                             Text("\(Int(vm.bitrateMbps)) Mbps")
                         }
+                        HStack {
+                            ForEach(FOSSQualityPreset.allCases) { preset in
+                                Button(preset.title) { vm.bitrateMbps = Double(preset.rawValue) }
+                                    .buttonStyle(.bordered)
+                                    .tint(Int(vm.bitrateMbps) == preset.rawValue
+                                          ? Color.accentColor : Color.gray)
+                            }
+                        }
                         Slider(value: $vm.bitrateMbps, in: 10...100, step: 5)
                         if isThisConnected, let t = deviceTelemetry, t.actualMbps > 0 {
                             HStack {
@@ -34,7 +57,7 @@ struct DeviceDetailView: View {
                                 Text("\(t.actualMbps) Mbps").monospacedDigit()
                             }
                         }
-                        Text("越高越清晰、越占带宽。连接时拖动实时生效；未连接时的设置会在连接后应用。")
+                        Text("极致档适合稳定的高速网络；码率越高越占带宽。档位或滑杆调整会实时生效，不改变画面分辨率。")
                             .font(.caption).foregroundStyle(.tertiary)
                         Text("使用 H.264 兼容模式，适配 Android 与卓易通接收端。")
                             .font(.caption).foregroundStyle(.secondary)

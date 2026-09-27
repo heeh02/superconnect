@@ -372,7 +372,7 @@ final class HostConnection: ConnectionEngine {
         let negHdr = HostMediaConfiguration.hdrEnabled(from: caps)
         let negFps = Int(HostMediaConfiguration.displayConfig(from: caps).refreshRate)
         let mi = vd.modeInfo()
-        self.tele.resolution = "\(mi.pointW)×\(mi.pointH)"
+        self.tele.resolution = "\(mi.pixelW)×\(mi.pixelH)"
         self.tele.codec = negCodec.rawValue.uppercased() + (negHdr ? " · HDR10" : "")
         self.telemetrySubject.send(self.tele)
 

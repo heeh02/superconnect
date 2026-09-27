@@ -16,8 +16,8 @@ INFO_TEMPLATE="$HERE/app/Info.plist"
 PRODUCT_NAME='superconnect-app-foss-preview'
 APP_NAME='Superconnect FOSS Preview'
 BUNDLE_ID='com.superconnect.foss.preview'
-SHORT_VERSION='0.2.1'
-BUILD_VERSION='3'
+SHORT_VERSION='0.2.2'
+BUILD_VERSION='5'
 
 fail() { print -u2 -- "$1"; exit 1; }
 

@@ -1,15 +1,15 @@
-# Build the v0.2.1 Mac FOSS Preview from source
+# Build the v0.2.2 Mac FOSS Preview candidate from source
 
-This document describes the Mac source deliverable for Superconnect FOSS Preview v0.2.1.
-The GitHub release does **not** contain a downloadable Mac app or ZIP. It contains reviewed
-source and these build instructions; the separately released Android APK is the installable
-artifact used on the tablet.
+This document describes an unpublished Mac successor candidate based on public v0.2.1 source.
+The published v0.2.1 source tag, Android APK and experimental Mac ZIP remain unchanged. This
+candidate adds consent-gated scroll/zoom input and visible 25/50/80 Mbps quality presets. It
+needs its own reviewed source and artifact identity before any public release.
 
 The Mac product built by this tree is:
 
 - app name: Superconnect FOSS Preview
 - bundle ID: com.superconnect.foss.preview
-- version/build: 0.2.1 / 3
+- version/build: 0.2.2 / 5
 - direction: Mac source to Android receiver
 - input policy: opt-in touch, pen and keyboard; injection requires app consent and Accessibility
 - current validated Mac architecture: Apple silicon (arm64)
@@ -24,7 +24,7 @@ v0.2.1 receiver requires SC-AUTH-v1 plus SC-RECORD-v1 before VIDEO or CONTROL is
 the old v0.2.0 Mac binary cannot cast to the v0.2.1 secure receiver. This is an intentional
 fail-closed protocol boundary, not an in-place update path.
 
-Keep an installed v0.2.0 app untouched if it is still needed. Build and test v0.2.1 under the new
+Keep an installed v0.2.0 app untouched if it is still needed. Build and test this candidate under the new
 bundle identity. Do not copy the old pairing secret or claim that its TCC grant migrates.
 
 ## Evidence boundary
@@ -33,15 +33,15 @@ The commands below prove that one exact clean Git commit builds the canonical Ru
 Mac sender with optional tablet control, and its local tests. They do not prove Developer ID signing, notarization,
 Store acceptance, or physical-tablet behavior.
 
-Do not upload the locally built executable or an Apple Development-signed app to the GitHub
-release. The v0.2.1 release page must state that no usable Mac binary download is provided.
+Do not upload the locally built executable or an Apple Development-signed app from this candidate.
+The published v0.2.1 experimental Mac ZIP has its own immutable source and artifact identity.
 
 GitHub Actions are not part of this build. Run the commands on a trusted Apple-silicon Mac with a
 full Xcode installation.
 
 ## 1. Select and record the exact source
 
-Clone the public repository and check out the exact v0.2.1 source commit named by the release. Do
+Clone the public repository and check out the exact reviewed successor commit for this candidate. Do
 not build from a private worktree, a dirty checkout, or a source archive with no Git identity.
 
 From the repository root:
