@@ -1,9 +1,8 @@
-# Build the v0.2.2 Mac FOSS Preview candidate from source
+# Build the v0.2.2 Mac FOSS Preview from source
 
-This document describes an unpublished Mac successor candidate based on public v0.2.1 source.
-The published v0.2.1 source tag, Android APK and experimental Mac ZIP remain unchanged. This
-candidate adds consent-gated scroll/zoom input and visible 25/50/80 Mbps quality presets. It
-needs its own reviewed source and artifact identity before any public release.
+This document describes the Mac source for the v0.2.2 FOSS successor. Public v0.2.1 remains
+immutable. v0.2.2 adds consent-gated right-click/scroll/zoom input and visible 25/50/80 Mbps
+quality presets; the release page binds its reviewed source, Core and downloadable artifacts.
 
 The Mac product built by this tree is:
 
@@ -20,11 +19,11 @@ defaults, or Screen Recording consent from the historical com.superconnect.free 
 ## Compatibility break from public v0.2.0
 
 The public v0.2.0 Mac binary uses the legacy handshake and plaintext application-record path. The
-v0.2.1 receiver requires SC-AUTH-v1 plus SC-RECORD-v1 before VIDEO or CONTROL is admitted. Therefore
-the old v0.2.0 Mac binary cannot cast to the v0.2.1 secure receiver. This is an intentional
+v0.2.1 and v0.2.2 receivers require SC-AUTH-v1 plus SC-RECORD-v1 before VIDEO or CONTROL is
+admitted. Therefore the old v0.2.0 Mac binary cannot cast to these secure receivers. This is an intentional
 fail-closed protocol boundary, not an in-place update path.
 
-Keep an installed v0.2.0 app untouched if it is still needed. Build and test this candidate under the new
+Keep an installed v0.2.0 app untouched if it is still needed. Build and test v0.2.2 under the new
 bundle identity. Do not copy the old pairing secret or claim that its TCC grant migrates.
 
 ## Evidence boundary
@@ -33,15 +32,17 @@ The commands below prove that one exact clean Git commit builds the canonical Ru
 Mac sender with optional tablet control, and its local tests. They do not prove Developer ID signing, notarization,
 Store acceptance, or physical-tablet behavior.
 
-Do not upload the locally built executable or an Apple Development-signed app from this candidate.
-The published v0.2.1 experimental Mac ZIP has its own immutable source and artifact identity.
+An ordinary distribution still needs Developer ID signing and notarization. For this explicitly
+experimental FOSS prerelease only, the integration owner may package the exact reviewed
+Apple Development-signed arm64 app after source-to-artifact and physical-pair acceptance. The ZIP
+must disclose Gatekeeper rejection, no notarization and no stable signing/update guarantee.
 
 GitHub Actions are not part of this build. Run the commands on a trusted Apple-silicon Mac with a
 full Xcode installation.
 
 ## 1. Select and record the exact source
 
-Clone the public repository and check out the exact reviewed successor commit for this candidate. Do
+Clone the public repository and check out the exact reviewed v0.2.2 release commit. Do
 not build from a private worktree, a dirty checkout, or a source archive with no Git identity.
 
 From the repository root:
@@ -124,8 +125,9 @@ Verify that the receipt still binds the current clean checkout:
 
 ## 4. Build the free Mac sender
 
-The free SwiftPM product links only the canonical Core, Mac capture/encode effects, and the
-free application composition. Its producer target excludes the input-injection files.
+The free SwiftPM product links only the canonical Core, Mac capture/encode effects, the bounded
+consent-gated FOSS input injector and the free application composition. It excludes the broader
+commercial product/runtime modules.
 
     set -euo pipefail
 
@@ -147,7 +149,8 @@ free application composition. Its producer target excludes the input-injection f
     file "$SC_FOSS_MAC_BINARY"
     shasum -a 256 "$SC_FOSS_MAC_BINARY"
 
-The resulting executable is source-build evidence. It is not the downloadable product asset.
+The resulting executable is source-build evidence. Only the integration owner's separately
+reviewed, signed and checksummed package is the downloadable experimental asset.
 
 Confirm that canonical secure-connection entry points and the consent-gated native input effects link:
 
@@ -207,9 +210,10 @@ physical pair-run:
     SC_FOSS_MAC_APP_RECEIPT_PATH="$SC_FOSS_LOCAL_RECEIPT" \
       "$SC_FOSS_ROOT/mac/assemble-foss-preview-local.sh"
 
-This app is local test evidence only. Do not ZIP or upload it. Do not use ad-hoc or self-signed
-signing as a distribution fallback. Screen Recording consent must be granted normally to the new
-bundle identity; do not reset or migrate the old app's permission.
+This command alone creates local test evidence, not a release. Do not use ad-hoc or self-signed
+signing as a fallback. Only the integration owner may package the exact accepted Apple Development
+app under the v0.2.2 experimental exception. Screen Recording and Accessibility consent must be
+granted normally; do not reset or migrate another app's permission.
 
 ## 7. Evidence required before the exact pair-run
 

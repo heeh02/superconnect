@@ -1,8 +1,8 @@
-# Superconnect FOSS-P1 Android Receiver — v0.2.2 successor candidate
+# Superconnect FOSS-P1 Android Receiver — v0.2.2 preview
 
-This public source builds one arm64 Android Receiver intended for Android and 卓易通. The v0.2.2
-candidate restores consent-gated stylus and two-finger input production paths. Device acceptance
-and signer-matched in-place upgrade remain separate from source and build checks.
+This public source builds one arm64 Android Receiver intended for Android and 卓易通. v0.2.2
+restores consent-gated stylus and two-finger input production paths. The release page records
+the exact artifact identity and physical acceptance separately from source and build checks.
 
 ## Composition
 
@@ -37,7 +37,8 @@ bash check-foss-native-boundary.sh
 
 ## Focused compile prerequisite
 
-Run Android tests and builds on the owned execution server. The pinned build requires Temurin 17,
+For this bounded v0.2.2 patch, the maintainer also permits a trusted AC-powered Apple-silicon Mac
+when the owned execution server is offline. The pinned build requires Temurin 17,
 the checked Gradle 8.9 wrapper and dependency-verification metadata, Android SDK 35/build-tools
 35.0.0, NDK 27.2.12479018, CMake 3.22.1, Ninja, host Clang and Rust 1.97.1 with
 `aarch64-linux-android` installed. The checkout must be clean so `tools/build-core-ffi.sh` can
@@ -61,7 +62,8 @@ commercial or Paddle component; its SHA-256 is
 
 ## Signing boundary
 
-Debug compilation needs no release credentials. The v0.2.1 open-source prerelease explicitly permits
-the debug-signed APK, but that key is per-machine and future signer changes may require uninstalling
-it, losing app-local data. Stable release tasks remain bound to a dedicated signer and fail if
+Debug compilation needs no release credentials. This v0.2.2 open-source prerelease explicitly
+permits a debug-signed APK. The published asset must use the same certificate as public v0.2.1 for
+the claimed in-place preview update; future signer changes may require uninstalling it and losing
+app-local data. Stable release tasks remain bound to a dedicated signer and fail if
 `keystore.properties`, a required field, or its keystore is missing. See `sign-release.md`.
